@@ -101,7 +101,7 @@ jobs:
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
         android.api = 31
         android.minapi = 21
-        android.ndk = 23b
+        android.ndk = 25.1.8937393
         android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
         android.enable_androidx = True
         p4a.branch = master
@@ -138,21 +138,35 @@ jobs:
         # Save environment variables for future steps
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$PATH" >> $GITHUB_ENV
+
+    - name: Cache Android SDK
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.android/cache
+          ~/android-sdk
+          ~/.buildozer
+        key: android-sdk-${{ runner.os }}        
     
     - name: Accept Android SDK licenses
       run: |
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        # Accept licenses with yes command
-        yes | sdkmanager --licenses > /dev/null 2>&1 || true
-        yes | sdkmanager --update > /dev/null 2>&1
+        # Создаем файл для автоматического принятия всех лицензий
+        mkdir -p $ANDROID_HOME/licenses
+        echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e" > $ANDROID_HOME/licenses/android-sdk-license
+        echo -e "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
         
-        # Install specific SDK components needed for build
-        yes | sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;23.1.7779620" > /dev/null 2>&1
-        
-        # Verify installation
-        sdkmanager --list_installed | grep -E "(platform-tools|platforms;android-31|build-tools;31.0.0|ndk)"
+        # Устанавливаем ВСЕ необходимые компоненты явно
+        yes | sdkmanager --verbose \
+          "platform-tools" \
+          "platforms;android-33" \
+          "build-tools;34.0.0" \
+          "ndk;25.1.8937393" \
+          "cmdline-tools;latest" \
+          "patcher;v4" \
+          "platforms;android-31"
     
     - name: Clean up Android SDK cache
       run: |
