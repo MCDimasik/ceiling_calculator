@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # Используем Ubuntu 22.04 вместо 20.04 для лучшей совместимости
+    runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout code
@@ -73,7 +73,9 @@ jobs:
           cmake \
           curl \
           wget \
-          gnupg
+          gnupg \
+          libc++-dev \
+          libc++abi-dev
     
     - name: Install Python dependencies
       run: |
@@ -107,10 +109,23 @@ jobs:
         warn_on_root = 1
         EOF
     
-    - name: Accept Android SDK licenses automatically
+    - name: Install Android SDK
       run: |
-        mkdir -p ~/.android
-        echo "count=0" > ~/.android/repositories.cfg
+        mkdir -p $HOME/android-sdk
+        cd $HOME/android-sdk
+        wget https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip
+        unzip commandlinetools-linux-10406996_latest.zip
+        mkdir -p $HOME/android-sdk/cmdline-tools
+        mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        export ANDROID_HOME=$HOME/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "PATH=$PATH" >> $GITHUB_ENV
+    
+    - name: Accept Android SDK licenses
+      run: |
+        export ANDROID_HOME=$HOME/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         yes | sdkmanager --licenses || true
         yes | sdkmanager --update
         yes | sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
@@ -121,20 +136,32 @@ jobs:
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
       run: |
+        export ANDROID_HOME=$HOME/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         export P4A_USE_SETUP_PYTHON=1
-        export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
-        mkdir -p "$ANDROID_HOME"
-        buildozer -v android debug deploy run 2>&1 | tee build.log
+        
+        # Очистка кэша перед сборкой
+        rm -rf ~/.buildozer
+        
+        # Запуск сборки с подробным логированием
+        buildozer -v android debug 2>&1 | tee build.log
+        
+        # Если сборка не удалась, показываем последние 100 строк лога
         if [ $? -ne 0 ]; then
-          echo "Build failed! Showing last 50 lines of build.log:"
-          tail -50 build.log
+          echo "=== BUILD FAILED ==="
+          echo "Last 100 lines of build.log:"
+          tail -100 build.log
           exit 1
         fi
-        cp bin/*.apk ./ceiling_calculator.apk
+        
+        # Копируем APK файл
+        mkdir -p artifacts
+        cp bin/*.apk artifacts/ceiling_calculator.apk
+        echo "APK file size: $(du -h artifacts/ceiling_calculator.apk)"
     
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: ceiling-calculator-apk
-        path: ceiling_calculator.apk
+        path: artifacts/ceiling_calculator.apk
         retention-days: 7
