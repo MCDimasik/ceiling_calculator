@@ -44,13 +44,11 @@ jobs:
     
     - name: Create requirements.txt with pinned versions
       run: |
-        cat > requirements.txt <<EOF
-kivy==2.1.0
-kivymd==1.1.1
-pillow==9.5.0
-cython==0.29.33
-buildozer==1.5.0
-EOF
+        echo "kivy==2.1.0" > requirements.txt
+        echo "kivymd==1.1.1" >> requirements.txt
+        echo "pillow==9.5.0" >> requirements.txt
+        echo "cython==0.29.33" >> requirements.txt
+        echo "buildozer==1.5.0" >> requirements.txt
     
     - name: Install Python dependencies
       run: |
@@ -59,42 +57,37 @@ EOF
     
     - name: Create optimized buildozer.spec
       run: |
-        cat > buildozer.spec <<EOF
-[app]
-title = Ceiling Calculator
-package.name = ceiling_calculator
-package.domain = org.test
-source.dir = .
-source.include_exts = py,png,jpg,kv,ttf,db
-version = 0.1
-requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0
-orientation = portrait
-android.arch = arm64-v8a
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
-android.api = 31
-android.minapi = 21
-android.ndk = 23b
-android.sdk = 31
-android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
-android.enable_androidx = True
-p4a.branch = master
-android.accept_sdk_license = True
-debug = 1
-
-[buildozer]
-log_level = 2
-warn_on_root = 1
-android.sdk_path = /opt/android-sdk
-android.ndk_path = /opt/android-sdk/ndk/23.1.7779620
-EOF
+        echo "[app]" > buildozer.spec
+        echo "title = Ceiling Calculator" >> buildozer.spec
+        echo "package.name = ceiling_calculator" >> buildozer.spec
+        echo "package.domain = org.test" >> buildozer.spec
+        echo "source.dir = ." >> buildozer.spec
+        echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
+        echo "version = 0.1" >> buildozer.spec
+        echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
+        echo "orientation = portrait" >> buildozer.spec
+        echo "android.arch = arm64-v8a" >> buildozer.spec
+        echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+        echo "android.api = 31" >> buildozer.spec
+        echo "android.minapi = 21" >> buildozer.spec
+        echo "android.ndk = 23b" >> buildozer.spec
+        echo "android.sdk = 31" >> buildozer.spec
+        echo "android.gradle_dependencies = 'com.google.android.material:material:1.8.0'" >> buildozer.spec
+        echo "android.enable_androidx = True" >> buildozer.spec
+        echo "p4a.branch = master" >> buildozer.spec
+        echo "android.accept_sdk_license = True" >> buildozer.spec
+        echo "debug = 1" >> buildozer.spec
+        echo "" >> buildozer.spec
+        echo "[buildozer]" >> buildozer.spec
+        echo "log_level = 2" >> buildozer.spec
+        echo "warn_on_root = 1" >> buildozer.spec
+        echo "android.sdk_path = /opt/android-sdk" >> buildozer.spec
+        echo "android.ndk_path = /opt/android-sdk/ndk/23.1.7779620" >> buildozer.spec
     
     - name: Install Android SDK with specific versions
       run: |
-        # Create SDK directory
         sudo mkdir -p /opt/android-sdk
         sudo chown -R $USER:$USER /opt/android-sdk
-        
-        # Download and install command line tools
         cd /tmp
         wget https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
         unzip commandlinetools-linux-8512546_latest.zip
@@ -102,16 +95,10 @@ EOF
         mv cmdline-tools /opt/android-sdk/cmdline-tools/latest
         export ANDROID_HOME=/opt/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        
-        # Accept licenses non-interactively
         mkdir -p $ANDROID_HOME/licenses
         echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
         echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        
-        # Install specific SDK components
         sdkmanager --install "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;23.1.7779620" "cmdline-tools;latest" --sdk_root=$ANDROID_HOME
-        
-        # Verify installation
         sdkmanager --list_installed --sdk_root=$ANDROID_HOME | grep -E "(platform-tools|platforms;android-31|build-tools;31.0.0|ndk)"
     
     - name: Set environment variables permanently
@@ -134,45 +121,36 @@ EOF
       run: |
         export PATH="$PATH:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
         export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
-        
         echo "Starting build process with debug logging"
         echo "Android SDK path: $ANDROID_HOME"
         echo "Java home: $JAVA_HOME"
         echo "PATH: $PATH"
-        
-        # First attempt
         echo "=== BUILD ATTEMPT 1 ==="
         buildozer -v android debug || {
           echo "First attempt failed. Cleaning up..."
           buildozer android clean
-          
-          # Second attempt
           echo "=== BUILD ATTEMPT 2 ==="
           buildozer -v android debug || {
             echo "Second attempt failed. Full cleanup..."
             rm -rf ~/.buildozer
             mkdir -p ~/.buildozer/android/platform
-            
-            # Third attempt
             echo "=== BUILD ATTEMPT 3 ==="
             buildozer -v android debug || {
               echo "=== FINAL BUILD FAILED ==="
               echo "Diagnostic information:"
-              echo "Buildozer version: $(buildozer --version)"
-              echo "Python version: $(python --version)"
+              echo "Buildozer version: $(buildozer --version 2>/dev/null || echo 'not found')"
+              echo "Python version: $(python --version 2>&1)"
               echo "Java version: $(java -version 2>&1)"
               echo "Android SDK contents:"
-              ls -la /opt/android-sdk
+              ls -la /opt/android-sdk || true
               echo "Build-tools directory:"
-              ls -la /opt/android-sdk/build-tools
+              ls -la /opt/android-sdk/build-tools || true
               echo "Last 200 lines of buildozer log:"
-              tail -200 ~/.buildozer/android/platform/python-for-android/buildozer/build.log || true
+              find ~/.buildozer -name "build.log" -exec tail -200 {} \; || true
               exit 1
             }
           }
         }
-        
-        # Find and copy APK
         APK_FILE=$(find bin/ -name "*.apk" 2>/dev/null | head -1)
         if [ -z "$APK_FILE" ]; then
           echo "ERROR: APK file not found!"
@@ -182,7 +160,6 @@ EOF
           find . -name "*.apk" -ls || true
           exit 1
         fi
-        
         mkdir -p artifacts
         cp "$APK_FILE" artifacts/ceiling_calculator.apk
         echo "✅ APK successfully built: $(du -h artifacts/ceiling_calculator.apk)"
@@ -193,14 +170,14 @@ EOF
           echo "❌ APK file not found after build!"
           exit 1
         fi
-        
-        # Basic APK validation
+        if ! command -v file &> /dev/null; then
+          sudo apt-get update && sudo apt-get install -y file
+        fi
         if ! file artifacts/ceiling_calculator.apk | grep -q "Android package"; then
           echo "❌ File is not a valid APK!"
           file artifacts/ceiling_calculator.apk
           exit 1
         fi
-        
         echo "✅ APK validation successful"
         ls -la artifacts/
     
