@@ -102,7 +102,6 @@ jobs:
         android.api = 31
         android.minapi = 21
         android.ndk = 25.1.8937393
-        android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
         android.enable_androidx = True
         p4a.branch = master
         debug = 1
@@ -148,25 +147,44 @@ jobs:
           ~/.buildozer
         key: android-sdk-${{ runner.os }}        
     
-    - name: Accept Android SDK licenses
+    - name: Accept Android SDK licenses and install tools
       run: |
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        # Создаем файл для автоматического принятия всех лицензий
+        # Создаем все необходимые файлы лицензий
         mkdir -p $ANDROID_HOME/licenses
-        echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e" > $ANDROID_HOME/licenses/android-sdk-license
-        echo -e "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+        cat > $ANDROID_HOME/licenses/android-sdk-license << EOF
+    8933bad161af4178b1185d1a37fbf41ea5269c55
+    d56f5187479451eabf01fb78af6dfcb131a6481e
+    EOF
         
-        # Устанавливаем ВСЕ необходимые компоненты явно
+        cat > $ANDROID_HOME/licenses/android-sdk-preview-license << EOF
+    84831b9409646a918e30573bab4c9c91346d8abd
+    EOF
+        
+        cat > $ANDROID_HOME/licenses/android-googletv-license << EOF
+    601085b94cd77f0b54ff86406957099ebe79c4d6
+    EOF
+        
+        # Устанавливаем только необходимые компоненты
         yes | sdkmanager --verbose \
           "platform-tools" \
           "platforms;android-33" \
-          "build-tools;34.0.0" \
+          "platforms;android-31" \
+          "build-tools;33.0.2" \
+          "build-tools;31.0.0" \
           "ndk;25.1.8937393" \
           "cmdline-tools;latest" \
-          "patcher;v4" \
-          "platforms;android-31"
+          "cmake;3.22.1" \
+          "patcher;v4" 2>/dev/null || echo "patcher;v4 not found, skipping"
+        
+        # Устанавливаем build-tools 36.1.0 отдельно (если требуется)
+        sdkmanager "build-tools;36.0.0" || echo "build-tools;36.0.0 not available"
+        
+        # Проверяем установленные компоненты
+        echo "=== Installed packages ==="
+        sdkmanager --list_installed | grep -E "(platform|build-tools|ndk|cmdline-tools)"
     
     - name: Clean up Android SDK cache
       run: |
