@@ -8,16 +8,21 @@ jobs:
     runs-on: ubuntu-22.04
     
     env:
-      # КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЕМ $HOME вместо жестких путей
       ANDROID_HOME: $HOME/android-sdk
       ANDROID_SDK_ROOT: $HOME/android-sdk
       PATH: $HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$PATH
 
     steps:
+    # 🔑 КРИТИЧЕСКИ ВАЖНО: СНАЧАЛА УСТАНАВЛИВАЕМ GIT
+    - name: Install Git and base dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git zip unzip
+        
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        submodules: true
+        submodules: true  # Теперь Git установлен и поддерживает подмодули
     
     - name: Set up Python environment
       uses: actions/setup-python@v5
@@ -36,7 +41,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           openjdk-17-jdk \
-          git zip unzip \
           python3-dev \
           libtool autoconf pkg-config \
           libssl-dev libffi-dev libbz2-dev libsqlite3-dev \
@@ -98,44 +102,36 @@ jobs:
     
     - name: Set up Android SDK CORRECTLY
       run: |
-        # ОЧИЩАЕМ ПРЕДЫДУЩИЕ ПОПЫТКИ
         rm -rf $HOME/android-sdk
         mkdir -p $HOME/android-sdk/cmdline-tools
         
-        # СКАЧИВАЕМ И РАСПАКОВЫВАЕМ ЧЕРЕЗ /tmp
         cd /tmp
         wget https://dl.google.com/android/repository/commandlinetools-linux-9123335_latest.zip
         unzip -q commandlinetools-linux-9123335_latest.zip
         
-        # ФОРМИРУЕМ ПРАВИЛЬНУЮ СТРУКТУРУ
         mkdir -p $ANDROID_HOME/cmdline-tools/latest
         mv cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/
         
-        # УСТАНАВЛИВАЕМ ПРАВА
         chmod +x $ANDROID_HOME/cmdline-tools/latest/bin/*
         
-        # ОТЛАДКА: ПРОВЕРЯЕМ СТРУКТУРУ
-        echo "SDK structure:"
-        ls -laR $ANDROID_HOME/cmdline-tools
-        
-        echo "sdkmanager path:"
-        which sdkmanager
-        ls -la $(which sdkmanager)
+        echo "✅ SDK structure verified:"
+        ls -la $ANDROID_HOME/cmdline-tools/latest/bin/
     
     - name: Install Android SDK components
       run: |
-        # ОБЯЗАТЕЛЬНО ПРОВЕРЯЕМ ДОСТУПНОСТЬ sdkmanager
-        if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-          echo "FATAL: sdkmanager not found at expected location!"
+        # Жесткая проверка наличия sdkmanager
+        SDKMANAGER_PATH="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        if [ ! -f "$SDKMANAGER_PATH" ]; then
+          echo "❌ FATAL: sdkmanager not found at $SDKMANAGER_PATH"
           ls -la $ANDROID_HOME/cmdline-tools
           exit 1
         fi
         
-        # ПРИНИМАЕМ ЛИЦЕНЗИИ ЧЕРЕЗ ПОЛНЫЙ ПУТЬ
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+        # Принимаем лицензии
+        yes | "$SDKMANAGER_PATH" --licenses >/dev/null 2>&1 || true
         
-        # УСТАНАВЛИВАЕМ КОМПОНЕНТЫ
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+        # Устанавливаем компоненты
+        "$SDKMANAGER_PATH" \
           "platform-tools" \
           "platforms;android-31" \
           "build-tools;31.0.0" \
@@ -143,35 +139,36 @@ jobs:
           "cmake;3.22.1" \
           "lldb;3.1" >/dev/null
         
-        # ВЕРИФИКАЦИЯ УСТАНОВКИ
-        echo "Installed components:"
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed | grep -E "(build-tools|ndk|cmake)"
+        echo "✅ Installed Android components:"
+        "$SDKMANAGER_PATH" --list_installed | grep -E "(build-tools|ndk|cmake)"
     
     - name: Build APK
       env:
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
       run: |
-        # ФИНАЛЬНАЯ ПРОВЕРКА ПУТЕЙ
+        echo "🔧 Environment check:"
         echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "sdkmanager location: $(which sdkmanager)"
-        echo "NDK path: $ANDROID_HOME/ndk/23.1.7779620"
+        echo "sdkmanager: $(which sdkmanager)"
         
-        # ЗАПУСК СБОРКИ
-        buildozer -v android debug
-        
-        # ПОИСК APK С УНИВЕРСАЛЬНЫМ ПУТЕМ
-        mkdir -p artifacts
-        APK_PATH=$(find ~/.buildozer -name "*.apk" 2>/dev/null | head -1)
-        
-        if [ -z "$APK_PATH" ]; then
-          echo "ERROR: APK not found in ~/.buildozer!"
+        # Запускаем сборку
+        buildozer -v android debug || {
+          echo "❌ Build failed! Checking APK location..."
           find ~/.buildozer -name "*.apk" -ls
+          exit 1
+        }
+        
+        # Ищем APK в правильном месте
+        APK_PATH=$(find ~/.buildozer -name "*.apk" 2>/dev/null | head -1)
+        if [ -z "$APK_PATH" ]; then
+          echo "❌ APK NOT FOUND! Full build directory listing:"
+          find ~/.buildozer -type f -name "*.apk" -ls
           exit 1
         fi
         
+        mkdir -p artifacts
         cp "$APK_PATH" artifacts/ceiling_calculator.apk
-        echo "✅ APK built successfully: $(realpath artifacts/ceiling_calculator.apk)"
+        echo "✅ APK SUCCESSFULLY BUILT:"
         ls -lh artifacts/
     
     - name: Upload APK artifact
