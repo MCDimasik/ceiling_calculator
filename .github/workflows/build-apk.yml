@@ -1,54 +1,84 @@
-name: Build
+name: Build APK - Using Official Buildozer Action
+
 on:
+  workflow_dispatch:
   push:
-    branches-ignore:
-      - data
-      - gh-pages
-    tags:
-      - '**'
+    branches: [ main, master ]
   pull_request:
-    branches-ignore:
-      - data
-      - gh-pages
+    branches: [ main, master ]
 
 jobs:
-  # Build job. Builds app for Android with Buildozer
   build-android:
     name: Build for Android
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          path: master
-
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          repository_root: master
-          workdir: test_app
-          buildozer_version: stable
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: package
-          path: ${{ steps.buildozer.outputs.filename }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          path: data
-          ref: data # Branch name
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.7
-          architecture: x64
-
-      - name: Push binary to data branch
-        if: github.event_name == 'push'
-        run: python master/.ci/move_binary.py "${{ steps.buildozer.outputs.filename }}" master data bin
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    
+    - name: Create or update buildozer.spec
+      run: |
+        # Если файл уже существует, не перезаписываем его полностью
+        if [ ! -f buildozer.spec ]; then
+          echo "[app]" > buildozer.spec
+          echo "title = Ceiling Calculator" >> buildozer.spec
+          echo "package.name = ceiling_calculator" >> buildozer.spec
+          echo "package.domain = org.test" >> buildozer.spec
+          echo "source.dir = ." >> buildozer.spec
+          echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
+          echo "version = 0.1" >> buildozer.spec
+          echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
+          echo "orientation = portrait" >> buildozer.spec
+          echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+          echo "android.archs = arm64-v8a" >> buildozer.spec
+          echo "android.api = 33" >> buildozer.spec
+          echo "android.minapi = 24" >> buildozer.spec
+          echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
+          echo "android.enable_androidx = True" >> buildozer.spec
+          echo "p4a.branch = master" >> buildozer.spec
+          echo "android.sdk = 33" >> buildozer.spec
+          echo "android.ndk = 25.1.8937393" >> buildozer.spec
+          echo "debug = 1" >> buildozer.spec
+          echo "" >> buildozer.spec
+          echo "[buildozer]" >> buildozer.spec
+          echo "log_level = 2" >> buildozer.spec
+          echo "warn_on_root = 1" >> buildozer.spec
+        else
+          # Обновляем только необходимые поля
+          if ! grep -q "android.archs" buildozer.spec; then
+            echo "android.archs = arm64-v8a" >> buildozer.spec
+          fi
+          if ! grep -q "android.api" buildozer.spec; then
+            echo "android.api = 33" >> buildozer.spec
+          fi
+          if ! grep -q "android.sdk" buildozer.spec; then
+            echo "android.sdk = 33" >> buildozer.spec
+          fi
+          if ! grep -q "android.ndk" buildozer.spec; then
+            echo "android.ndk = 25.1.8937393" >> buildozer.spec
+          fi
+        fi
+    
+    - name: Build with Buildozer Action
+      uses: ArtemSBulgakov/buildozer-action@v1
+      id: buildozer
+      with:
+        command: buildozer android debug
+        buildozer_version: 1.5.0
+    
+    - name: List generated files
+      run: |
+        echo "Generated APK: ${{ steps.buildozer.outputs.filename }}"
+        echo "Directory listing:"
+        find . -name "*.apk" -type f 2>/dev/null | while read file; do
+          echo "Found: $file ($(du -h "$file" | cut -f1))"
+        done
+    
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ceiling-calculator-apk
+        path: ${{ steps.buildozer.outputs.filename }}
+        retention-days: 7
