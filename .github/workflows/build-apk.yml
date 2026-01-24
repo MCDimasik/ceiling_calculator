@@ -5,28 +5,38 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest  # Используем последнюю версию Ubuntu
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        submodules: true
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
+        python-version: '3.10'
+        cache: 'pip'
     
-    - name: Install dependencies
+    - name: Clean up disk space
+      run: |
+        sudo apt-get clean
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        df -h
+    
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           git \
           zip \
           unzip \
-          openjdk-11-jdk \
-          python3 \
-          python3-pip \
-          python3-venv \
+          openjdk-17-jdk \
           autoconf \
           libtool \
           pkg-config \
@@ -37,12 +47,10 @@ jobs:
           libncurses5-dev \
           libncursesw5-dev \
           zlib1g-dev \
-          libgdbm-dev \
           libreadline-dev \
           liblzma-dev \
           libxml2-dev \
           libxslt1-dev \
-          libffi-dev \
           ffmpeg \
           libsdl2-dev \
           libsdl2-image-dev \
@@ -58,41 +66,29 @@ jobs:
           patchelf \
           libsqlite3-dev
     
-    - name: Install Buildozer and dependencies
+    - name: Install Python dependencies
       run: |
-        python3 -m pip install --upgrade pip
-        pip install buildozer
-        pip install cython==0.29.33
-        pip install kivy
-        pip install kivymd
-        pip install pillow
-    
-    - name: Create required directories
-      run: |
-        mkdir -p ~/.gradle
-        echo "org.gradle.daemon=false" >> ~/.gradle/gradle.properties
-    
+        python -m pip install --upgrade pip
+        pip install --upgrade buildozer cython==0.29.35 kivy kivymd pillow
+        
     - name: Create buildozer.spec
       run: |
         cat > buildozer.spec <<EOF
         [app]
         title = Ceiling Calculator
         package.name = ceiling_calculator
-        package.domain = org.example
+        package.domain = org.test
         source.dir = .
-        source.include_exts = py,png,jpg,kv,atlas,ttf,db
+        source.include_exts = py,png,jpg,kv,ttf,db
         version = 0.1
         requirements = python3,kivy,kivymd,sqlite3,android,pillow
         orientation = portrait
-        osx.python_version = 3
-        osx.kivy_version = 2.1.0
-        fullscreen = 1
         android.arch = arm64-v8a
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
-        android.api = 31
-        android.minapi = 21
-        android.ndk = 23b
-        android.gradle_dependencies = 'com.google.android.material:material:1.4.0'
+        android.api = 33
+        android.minapi = 26
+        android.ndk = 25b
+        android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
         android.enable_androidx = True
         p4a.branch = master
         debug = 1
@@ -102,17 +98,20 @@ jobs:
         warn_on_root = 1
         EOF
     
-    - name: Build APK
-      id: build_apk
+    - name: Build APK with retries
       env:
-        JAVA_OPTS: "-Xmx4096m"
+        JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
+        GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
       run: |
         export P4A_USE_SETUP_PYTHON=1
-        buildozer android debug
-        cp bin/*.apk ./ceiling_calculator.apk
+        export P4A_BUILD_RETRIES=3
+        buildozer -v android debug || (echo "First attempt failed, retrying..." && sleep 10 && buildozer -v android debug)
+        cp bin/*.apk ./ceiling_calculator.apk || echo "APK file not found"
     
     - name: Upload APK artifact
-      uses: actions/upload-artifact@v3
+      if: always()
+      uses: actions/upload-artifact@v4
       with:
         name: ceiling-calculator-apk
         path: ceiling_calculator.apk
+        retention-days: 7
