@@ -1,145 +1,27 @@
-name: Build APK - FIXED STRUCTURE
+name: Build APK with Buildozer Action
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
-    
+  build-android:
+    name: Build for Android
+    runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          git zip unzip openjdk-17-jdk python3-dev autoconf libtool pkg-config \
-          libssl-dev libffi-dev libbz2-dev libsqlite3-dev libncurses5-dev \
-          libncursesw5-dev zlib1g-dev libreadline-dev liblzma-dev libxml2-dev \
-          libxslt1-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev \
-          libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev \
-          libavcodec-dev libjpeg-dev libpng-dev libgles2-mesa-dev patchelf \
-          cmake curl wget gnupg libc++-dev libc++abi-dev build-essential \
-          software-properties-common libncurses-dev lib32z1 lib32stdc++6
-    
-    - name: Create requirements.txt
-      run: |
-        echo "kivy==2.1.0" > requirements.txt
-        echo "kivymd==1.1.1" >> requirements.txt
-        echo "pillow==9.5.0" >> requirements.txt
-        echo "cython==0.29.33" >> requirements.txt
-        echo "buildozer==1.5.0" >> requirements.txt
-    
-    - name: Install Python packages
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    
-    - name: Create buildozer.spec
-      run: |
-        echo "[app]" > buildozer.spec
-        echo "title = Ceiling Calculator" >> buildozer.spec
-        echo "package.name = ceiling_calculator" >> buildozer.spec
-        echo "package.domain = org.test" >> buildozer.spec
-        echo "source.dir = ." >> buildozer.spec
-        echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
-        echo "version = 0.1" >> buildozer.spec
-        echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
-        echo "orientation = portrait" >> buildozer.spec
-        echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
-        echo "android.arch = arm64-v8a" >> buildozer.spec
-        echo "android.api = 31" >> buildozer.spec
-        echo "android.minapi = 21" >> buildozer.spec
-        echo "android.ndk = 25b" >> buildozer.spec
-        echo "android.sdk = 31" >> buildozer.spec
-        echo "android.gradle_dependencies = 'com.google.android.material:material:1.8.0'" >> buildozer.spec
-        echo "android.enable_androidx = True" >> buildozer.spec
-        echo "p4a.branch = master" >> buildozer.spec
-        echo "" >> buildozer.spec
-        echo "[buildozer]" >> buildozer.spec
-        echo "log_level = 2" >> buildozer.spec
-        echo "warn_on_root = 1" >> buildozer.spec
-    
-    - name: Install Android SDK with CORRECT structure
-      env:
-        ANDROID_HOME: $HOME/android-sdk
-      run: |
-        # Создаем правильную структуру папок ДО распаковки
-        mkdir -p $ANDROID_HOME/cmdline-tools/latest
-        
-        # Скачиваем tools
-        wget https://dl.google.com/android/repository/commandlinetools-linux-8092744_latest.zip
-        unzip -q commandlinetools-linux-8092744_latest.zip
-        
-        # Копируем файлы ВНУТРЬ папки latest (это КРИТИЧЕСКИ ВАЖНО)
-        cp -r cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/
-        
-        # Принимаем лицензии ВРУЧНУЮ (надежный способ)
-        mkdir -p $ANDROID_HOME/licenses
-        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-        
-        # Настраиваем PATH
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        
-        # Проверяем работу sdkmanager
-        echo "Testing sdkmanager..."
-        sdkmanager --version
-        
-        # Устанавливаем компоненты
-        yes | sdkmanager --licenses >/dev/null 2>&1 || true
-        sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;25.1.8937393" --sdk_root=$ANDROID_HOME
-        
-        # Проверяем установку
-        echo "Installed components:"
-        sdkmanager --list_installed --sdk_root=$ANDROID_HOME
-    
-    - name: Set environment variables
-      run: |
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-    
-    - name: Verify SDK installation
-      run: |
-        echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "PATH: $PATH"
-        which sdkmanager
-        sdkmanager --version
-        ls -la $HOME/android-sdk/cmdline-tools/latest/bin/
-    
-    - name: Build APK
-      env:
-        JAVA_OPTS: "-Xmx4096M"
-        GRADLE_OPTS: "-Dorg.gradle.daemon=false"
-        P4A_USE_SETUP_PYTHON: "1"
-        ANDROID_HOME: $HOME/android-sdk
-      run: |
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        buildozer -v android debug
-    
-    - name: Find APK
-      run: |
-        APK_FILE=$(find . -name "*.apk" -type f | head -1)
-        if [ -z "$APK_FILE" ]; then
-          echo "APK not found!"
-          find . -name "*.apk" -ls
-          exit 1
-        fi
-        mkdir -p artifacts
-        cp "$APK_FILE" artifacts/ceiling_calculator.apk
-        echo "APK found at: $APK_FILE"
-    
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: ceiling-calculator-apk
-        path: artifacts/ceiling_calculator.apk
-        retention-days: 7
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          workdir: .
+          buildozer_version: stable
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceiling-calculator-apk
+          path: ${{ steps.buildozer.outputs.filename }}
