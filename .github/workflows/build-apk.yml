@@ -91,15 +91,22 @@ jobs:
         echo "Downloading Android command line tools..."
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
         unzip -q cmdline.zip
-        mkdir -p cmdline-tools/latest
-        mv cmdline-tools/* cmdline-tools/latest/
-        rm -rf cmdline.zip
+        rm -f cmdline.zip
+
+        # Нормализуем структуру, независимо от версии архива
+        if [ -d "cmdline-tools/latest" ]; then
+          echo "cmdline-tools/latest already exists"
+        else
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/
+        fi
 
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
 
-        echo "Installing SDK components..."
+        echo "Accepting licenses..."
         yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
 
+        echo "Installing SDK components..."
         sdkmanager --sdk_root=$ANDROID_HOME \
           "platform-tools" \
           "platforms;android-33" \
@@ -113,6 +120,7 @@ jobs:
 
         echo "Verifying AIDL:"
         find $ANDROID_HOME/build-tools -name aidl
+
 
     - name: Set Android environment
       run: |
