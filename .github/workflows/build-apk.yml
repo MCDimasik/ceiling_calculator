@@ -55,37 +55,63 @@ jobs:
           libjpeg-dev \
           libpng-dev \
           libgles2-mesa-dev \
-          patchelf
-          
-    - name: Install Buildozer
+          patchelf \
+          libsqlite3-dev
+    
+    - name: Install Buildozer and dependencies
       run: |
         python3 -m pip install --upgrade pip
         pip install buildozer
         pip install cython==0.29.33
         pip install kivy
         pip install kivymd
+        pip install pillow
     
     - name: Create required directories
       run: |
         mkdir -p ~/.gradle
         echo "org.gradle.daemon=false" >> ~/.gradle/gradle.properties
     
-    - name: Fix gradlew permissions
+    - name: Create buildozer.spec
       run: |
-        mkdir -p .buildozer/android/platform/build-arm64-v8a/dists/
-        echo "#!/bin/sh" > .buildozer/android/platform/build-arm64-v8a/dists/gradlew
-        echo "export GRADLE_USER_HOME=\"\$HOME/.gradle\"" >> .buildozer/android/platform/build-arm64-v8a/dists/gradlew
-        echo "./gradlew \"\$@\"" >> .buildozer/android/platform/build-arm64-v8a/dists/gradlew
-        chmod +x .buildozer/android/platform/build-arm64-v8a/dists/gradlew
+        cat > buildozer.spec <<EOF
+        [app]
+        title = Ceiling Calculator
+        package.name = ceiling_calculator
+        package.domain = org.example
+        source.dir = .
+        source.include_exts = py,png,jpg,kv,atlas,ttf,db
+        version = 0.1
+        requirements = python3,kivy,kivymd,sqlite3,android,pillow
+        orientation = portrait
+        osx.python_version = 3
+        osx.kivy_version = 2.1.0
+        fullscreen = 1
+        android.arch = arm64-v8a
+        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
+        android.api = 31
+        android.minapi = 21
+        android.ndk = 23b
+        android.gradle_dependencies = 'com.google.android.material:material:1.4.0'
+        android.enable_androidx = True
+        p4a.branch = master
+        debug = 1
+        
+        [buildozer]
+        log_level = 2
+        warn_on_root = 1
+        EOF
     
     - name: Build APK
       id: build_apk
+      env:
+        JAVA_OPTS: "-Xmx4096m"
       run: |
         export P4A_USE_SETUP_PYTHON=1
-        buildozer -v android debug
+        buildozer android debug
         cp bin/*.apk ./ceiling_calculator.apk
     
-    - name: Upload APK
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v3
       with:
         name: ceiling-calculator-apk
