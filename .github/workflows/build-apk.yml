@@ -1,80 +1,41 @@
-name: Build APK - Optimized with Caching
+name: Build APK with Docker
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
 
 jobs:
-  build-android:
-    name: Build for Android
+  build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: true
-    
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Cache Buildozer global directory
       uses: actions/cache@v4
       with:
-        path: .buildozer_global
+        path: /tmp/.buildozer_global
         key: buildozer-global-${{ hashFiles('buildozer.spec') }}
-        restore-keys: |
-          buildozer-global-
-    
-    - name: Cache Python packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
-    - name: Create requirements.txt for build
+
+    - name: Build with Buildozer Docker image
       run: |
-        echo "# Build requirements" > requirements.txt
-        echo "buildozer==1.5.0" >> requirements.txt
-        
-        # Если у вас есть собственные зависимости, добавьте их здесь
-        # echo "kivy==2.1.0" >> requirements.txt
-        # echo "kivymd==1.1.1" >> requirements.txt
-    
-    - name: Build with Buildozer Action
-      uses: ArtemSBulgakov/buildozer-action@v1
-      id: buildozer
-      env:
-        # Переопределяем настройки через переменные окружения
-        APP_ANDROID_ARCH: arm64-v8a
-        APP_ANDROID_API: 33
-        APP_ANDROID_MINAPI: 24
-        APP_ANDROID_SDK: 33
-        APP_ANDROID_NDK: 25.1.8937393
-      with:
-        command: buildozer android debug
-        buildozer_version: 1.5.0
-    
-    - name: Upload APK artifact
+        # Создаем директорию для кэша, если её нет
+        mkdir -p /tmp/.buildozer_global
+
+        # Запускаем Buildozer в Docker контейнере
+        docker run --rm \
+          --volume "$PWD":/home/user/hostcwd \
+          --volume "/tmp/.buildozer_global":/home/user/.buildozer \
+          --workdir /home/user/hostcwd \
+          kivy/buildozer:latest android debug
+
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: ceiling-calculator-apk
-        path: ${{ steps.buildozer.outputs.filename }}
-        retention-days: 7
-    
-    - name: Upload multiple artifacts if multiple APKs
-      if: failure()  # Запускается, если предыдущий шаг не нашел файл
-      run: |
-        mkdir -p apk-artifacts
-        # Ищем все APK файлы
-        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
-          cp "$apk" "apk-artifacts/$(basename "$apk")"
-        done
-        
-        # Если нашли APK файлы, загружаем их
-        if [ "$(ls -1 apk-artifacts/*.apk 2>/dev/null | wc -l)" -gt 0 ]; then
-          echo "Found APK files, uploading..."
-        fi
-      continue-on-error: true
+        name: app-apk
+        path: bin/*.apk
