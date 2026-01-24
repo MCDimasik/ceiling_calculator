@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-22.04
     
     env:
-      # ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ВСЕХ ШАГОВ
-      ANDROID_HOME: /home/runner/android-sdk
-      ANDROID_SDK_ROOT: /home/runner/android-sdk
-      PATH: /home/runner/android-sdk/cmdline-tools/latest/bin:/home/runner/android-sdk/platform-tools:$PATH
+      # КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЕМ $HOME вместо жестких путей
+      ANDROID_HOME: $HOME/android-sdk
+      ANDROID_SDK_ROOT: $HOME/android-sdk
+      PATH: $HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$PATH
 
     steps:
     - name: Checkout code
@@ -24,13 +24,10 @@ jobs:
       with:
         python-version: '3.10'
     
-    - name: Clean up disk space before installation
+    - name: Clean up disk space
       run: |
         sudo apt-get clean
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "$AGENT_TOOLSDIRECTORY"
         sudo docker image prune --all --force
         df -h
     
@@ -38,46 +35,20 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          git \
-          zip \
-          unzip \
           openjdk-17-jdk \
+          git zip unzip \
           python3-dev \
-          autoconf \
-          libtool \
-          pkg-config \
-          libssl-dev \
-          libffi-dev \
-          libbz2-dev \
-          libsqlite3-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          zlib1g-dev \
-          libreadline-dev \
-          liblzma-dev \
-          libxml2-dev \
-          libxslt1-dev \
+          libtool autoconf pkg-config \
+          libssl-dev libffi-dev libbz2-dev libsqlite3-dev \
+          libncurses5-dev libncursesw5-dev zlib1g-dev \
+          libreadline-dev liblzma-dev libxml2-dev libxslt1-dev \
           ffmpeg \
-          libsdl2-dev \
-          libsdl2-image-dev \
-          libsdl2-mixer-dev \
-          libsdl2-ttf-dev \
-          libportmidi-dev \
-          libswscale-dev \
-          libavformat-dev \
-          libavcodec-dev \
-          libjpeg-dev \
-          libpng-dev \
-          libgles2-mesa-dev \
-          patchelf \
-          cmake \
-          curl \
-          wget \
-          gnupg \
-          libc++-dev \
-          libc++abi-dev \
-          build-essential
-
+          libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+          libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
+          libjpeg-dev libpng-dev libgles2-mesa-dev \
+          patchelf cmake curl wget gnupg \
+          libc++-dev libc++abi-dev build-essential
+    
     - name: Create requirements.txt
       run: |
         cat > requirements.txt <<EOF
@@ -125,34 +96,46 @@ jobs:
         android.accept_sdk_preview_license = True
         EOF
     
-    - name: Set up Android SDK properly
+    - name: Set up Android SDK CORRECTLY
       run: |
-        # Создаем структуру SDK с правильной вложенностью
-        mkdir -p $ANDROID_HOME/cmdline-tools
-        cd $ANDROID_HOME
+        # ОЧИЩАЕМ ПРЕДЫДУЩИЕ ПОПЫТКИ
+        rm -rf $HOME/android-sdk
+        mkdir -p $HOME/android-sdk/cmdline-tools
         
-        # Скачиваем и распаковываем в правильную структуру
+        # СКАЧИВАЕМ И РАСПАКОВЫВАЕМ ЧЕРЕЗ /tmp
+        cd /tmp
         wget https://dl.google.com/android/repository/commandlinetools-linux-9123335_latest.zip
-        unzip -q commandlinetools-linux-9123335_latest.zip -d cmdline-tools
-        mv cmdline-tools/cmdline-tools cmdline-tools/latest
+        unzip -q commandlinetools-linux-9123335_latest.zip
         
-        # Устанавливаем права на исполнение
+        # ФОРМИРУЕМ ПРАВИЛЬНУЮ СТРУКТУРУ
+        mkdir -p $ANDROID_HOME/cmdline-tools/latest
+        mv cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/
+        
+        # УСТАНАВЛИВАЕМ ПРАВА
         chmod +x $ANDROID_HOME/cmdline-tools/latest/bin/*
         
-        # Проверяем структуру
-        ls -la $ANDROID_HOME/cmdline-tools/latest/bin/
-        which sdkmanager || echo "sdkmanager not in PATH"
+        # ОТЛАДКА: ПРОВЕРЯЕМ СТРУКТУРУ
+        echo "SDK structure:"
+        ls -laR $ANDROID_HOME/cmdline-tools
+        
+        echo "sdkmanager path:"
+        which sdkmanager
+        ls -la $(which sdkmanager)
     
-    - name: Accept Android SDK licenses
+    - name: Install Android SDK components
       run: |
-        # Явно проверяем наличие sdkmanager
-        ls -la $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+        # ОБЯЗАТЕЛЬНО ПРОВЕРЯЕМ ДОСТУПНОСТЬ sdkmanager
+        if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+          echo "FATAL: sdkmanager not found at expected location!"
+          ls -la $ANDROID_HOME/cmdline-tools
+          exit 1
+        fi
         
-        # Принимаем ВСЕ лицензии с явным путем
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
+        # ПРИНИМАЕМ ЛИЦЕНЗИИ ЧЕРЕЗ ПОЛНЫЙ ПУТЬ
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
         
-        # Устанавливаем ТОЧНЫЕ версии компонентов
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+        # УСТАНАВЛИВАЕМ КОМПОНЕНТЫ
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           "platform-tools" \
           "platforms;android-31" \
           "build-tools;31.0.0" \
@@ -160,37 +143,35 @@ jobs:
           "cmake;3.22.1" \
           "lldb;3.1" >/dev/null
         
-        # Проверяем установку
+        # ВЕРИФИКАЦИЯ УСТАНОВКИ
+        echo "Installed components:"
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed | grep -E "(build-tools|ndk|cmake)"
-    
-    - name: Clean up Android SDK cache
-      run: |
-        rm -rf $ANDROID_HOME/.cache
-        rm -rf ~/.gradle/caches
     
     - name: Build APK
       env:
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
       run: |
-        # Проверяем пути перед сборкой
+        # ФИНАЛЬНАЯ ПРОВЕРКА ПУТЕЙ
         echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "SDK contents:"
-        ls -la $ANDROID_HOME
+        echo "sdkmanager location: $(which sdkmanager)"
+        echo "NDK path: $ANDROID_HOME/ndk/23.1.7779620"
         
-        # Запускаем сборку
+        # ЗАПУСК СБОРКИ
         buildozer -v android debug
         
-        # Копируем APK
+        # ПОИСК APK С УНИВЕРСАЛЬНЫМ ПУТЕМ
         mkdir -p artifacts
-        APK_PATH=$(find . -name "*.apk" | head -1)
+        APK_PATH=$(find ~/.buildozer -name "*.apk" 2>/dev/null | head -1)
+        
         if [ -z "$APK_PATH" ]; then
-          echo "APK not found!"
-          find . -name "*.apk"
+          echo "ERROR: APK not found in ~/.buildozer!"
+          find ~/.buildozer -name "*.apk" -ls
           exit 1
         fi
+        
         cp "$APK_PATH" artifacts/ceiling_calculator.apk
-        echo "APK built at: $(pwd)/artifacts/ceiling_calculator.apk"
+        echo "✅ APK built successfully: $(realpath artifacts/ceiling_calculator.apk)"
         ls -lh artifacts/
     
     - name: Upload APK artifact
