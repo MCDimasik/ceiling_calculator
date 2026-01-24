@@ -16,7 +16,7 @@ jobs:
           docker run --rm \
             -v $PWD:/home/user/app \
             kivy/buildozer \
-            bash -c "cd /home/user/app && buildozer android debug"
+            bash -c "cd /home/user/app && buildozer android debug --allow-root"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
