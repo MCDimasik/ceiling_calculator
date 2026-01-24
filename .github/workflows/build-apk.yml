@@ -78,42 +78,48 @@ jobs:
         echo "log_level = 2" >> buildozer.spec
         echo "warn_on_root = 1" >> buildozer.spec
     
-    - name: Install Android SDK and NDK correctly
+    - name: Install Android SDK + NDK + accept licenses (correct way)
       run: |
-        # Устанавливаем Android SDK в домашнюю директорию пользователя
-        mkdir -p $HOME/android-sdk
-        cd /tmp
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        mkdir -p $HOME/android-sdk/cmdline-tools
-        mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        set -e
+
         export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        mkdir -p $ANDROID_HOME
+        cd $ANDROID_HOME
+
+        echo "Downloading Android command line tools..."
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
+        unzip -q cmdline.zip
+        mkdir -p cmdline-tools/latest
+        mv cmdline-tools/* cmdline-tools/latest/
+        rm -rf cmdline.zip
+
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        
-        # Принимаем лицензии ПРАВИЛЬНЫМ способом
-        mkdir -p $ANDROID_HOME/licenses
-        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-        
-        # Автоматически принимаем все лицензии
-        yes | sdkmanager --licenses --sdk_root=$ANDROID_HOME >/dev/null 2>&1 || true
-        
-        # Устанавливаем КОНКРЕТНЫЕ версии, которые работают с Buildozer
-        sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" --sdk_root=$ANDROID_HOME >/dev/null 2>&1
-        sdkmanager --install "cmake;3.22.1" "cmdline-tools;latest" --sdk_root=$ANDROID_HOME >/dev/null 2>&1
-        
-        # Дополнительно устанавливаем системные build-tools и aidl
-        sudo apt-get install -y android-sdk android-sdk-build-tools aidl
-        
-        # Проверяем установку
-        echo "Installed SDK components:"
-        sdkmanager --list_installed --sdk_root=$ANDROID_HOME
-    
-    - name: Set environment variables
+
+        echo "Installing SDK components..."
+        yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
+
+        sdkmanager --sdk_root=$ANDROID_HOME \
+          "platform-tools" \
+          "platforms;android-33" \
+          "build-tools;33.0.2" \
+          "build-tools;36.1.0" \
+          "ndk;25.1.8937393" \
+          "cmake;3.22.1"
+
+        echo "Verifying build-tools:"
+        ls -la $ANDROID_HOME/build-tools
+
+        echo "Verifying AIDL:"
+        find $ANDROID_HOME/build-tools -name aidl
+
+    - name: Set Android environment
       run: |
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/25.1.8937393" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+
     
     - name: Clean build directory
       run: |
