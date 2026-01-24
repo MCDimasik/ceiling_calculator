@@ -13,26 +13,19 @@ jobs:
       with:
         submodules: true
     
-    - name: Create requirements.txt
-      run: |
-        echo "kivy==2.1.0" > requirements.txt
-        echo "kivymd==1.1.1" >> requirements.txt
-        echo "pillow==9.5.0" >> requirements.txt
-        echo "cython==0.29.33" >> requirements.txt
-        echo "buildozer==1.5.0" >> requirements.txt
-    
-    - name: Set up Python
+    - name: Set up Python environment
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     
-    - name: Clean up disk space
+    - name: Clean up disk space before installation
       run: |
         sudo apt-get clean
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /opt/ghc
         sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo docker image prune --all --force
         df -h
     
     - name: Install system dependencies
@@ -43,6 +36,7 @@ jobs:
           zip \
           unzip \
           openjdk-17-jdk \
+          python3-dev \
           autoconf \
           libtool \
           pkg-config \
@@ -75,7 +69,16 @@ jobs:
           wget \
           gnupg \
           libc++-dev \
-          libc++abi-dev
+          libc++abi-dev \
+          build-essential
+    
+    - name: Create requirements.txt
+      run: |
+        echo "kivy==2.1.0" > requirements.txt
+        echo "kivymd==1.1.1" >> requirements.txt
+        echo "pillow==9.5.0" >> requirements.txt
+        echo "cython==0.29.33" >> requirements.txt
+        echo "buildozer==1.5.0" >> requirements.txt
     
     - name: Install Python dependencies
       run: |
@@ -90,15 +93,15 @@ jobs:
         package.name = ceiling_calculator
         package.domain = org.test
         source.dir = .
-        source.include_exts = py,png,jpg,kv,ttf
+        source.include_exts = py,png,jpg,kv,ttf,db
         version = 0.1
         requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0
         orientation = portrait
         android.arch = arm64-v8a
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
-        android.api = 33
-        android.minapi = 26
-        android.ndk = 25b
+        android.api = 31
+        android.minapi = 21
+        android.ndk = 23b
         android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
         android.enable_androidx = True
         p4a.branch = master
@@ -107,18 +110,32 @@ jobs:
         [buildozer]
         log_level = 2
         warn_on_root = 1
+        android.adb_path = /usr/bin/adb
         EOF
     
-    - name: Install Android SDK
+    - name: Set up Android SDK properly
       run: |
-        mkdir -p $HOME/android-sdk
-        cd $HOME/android-sdk
-        wget https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip
-        unzip commandlinetools-linux-10406996_latest.zip
+        # Create Android SDK directory structure
         mkdir -p $HOME/android-sdk/cmdline-tools
-        mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        cd $HOME/android-sdk/cmdline-tools
+        
+        # Download and extract Android command line tools
+        wget https://dl.google.com/android/repository/commandlinetools-linux-9123335_latest.zip
+        unzip commandlinetools-linux-9123335_latest.zip
+        
+        # Rename the extracted folder to 'latest' as required by sdkmanager
+        mv cmdline-tools latest
+        
+        # Set environment variables
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        # Make directories for SDK components
+        mkdir -p $ANDROID_HOME/platform-tools
+        mkdir -p $ANDROID_HOME/build-tools
+        mkdir -p $ANDROID_HOME/platforms
+        
+        # Save environment variables for future steps
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$PATH" >> $GITHUB_ENV
     
@@ -126,38 +143,79 @@ jobs:
       run: |
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        yes | sdkmanager --licenses || true
-        yes | sdkmanager --update
-        yes | sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-        yes | sdkmanager --licenses
+        
+        # Accept licenses with yes command
+        yes | sdkmanager --licenses > /dev/null 2>&1 || true
+        yes | sdkmanager --update > /dev/null 2>&1
+        
+        # Install specific SDK components needed for build
+        yes | sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;23.1.7779620" > /dev/null 2>&1
+        
+        # Verify installation
+        sdkmanager --list_installed | grep -E "(platform-tools|platforms;android-31|build-tools;31.0.0|ndk)"
     
-    - name: Build APK with verbose logging
+    - name: Clean up Android SDK cache
+      run: |
+        export ANDROID_HOME=$HOME/android-sdk
+        sudo apt-get clean
+        rm -rf $ANDROID_HOME/.cache
+        rm -rf ~/.gradle/caches
+    
+    - name: Build APK with verbose logging and retries
       env:
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+        P4A_USE_ANDROID_NDK: "True"
+        P4A_BUILD_RETRIES: "3"
       run: |
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         export P4A_USE_SETUP_PYTHON=1
         
-        # Очистка кэша перед сборкой
-        rm -rf ~/.buildozer
+        # First attempt
+        echo "Starting build attempt 1..."
+        buildozer -v android debug || {
+          echo "First build attempt failed. Cleaning and retrying..."
+          buildozer android clean
+          
+          # Second attempt
+          echo "Starting build attempt 2..."
+          buildozer -v android debug || {
+            echo "Second build attempt failed. Full clean and final attempt..."
+            rm -rf ~/.buildozer
+            mkdir -p ~/.buildozer/android/platform
+            
+            # Third attempt
+            echo "Starting build attempt 3..."
+            buildozer -v android debug || {
+              echo "All build attempts failed!"
+              exit 1
+            }
+          }
+        }
         
-        # Запуск сборки с подробным логированием
-        buildozer -v android debug 2>&1 | tee build.log
-        
-        # Если сборка не удалась, показываем последние 100 строк лога
-        if [ $? -ne 0 ]; then
-          echo "=== BUILD FAILED ==="
-          echo "Last 100 lines of build.log:"
-          tail -100 build.log
+        # Copy APK to artifacts directory
+        mkdir -p artifacts
+        find bin/ -name "*.apk" -exec cp {} artifacts/ceiling_calculator.apk \;
+        if [ ! -f artifacts/ceiling_calculator.apk ]; then
+          echo "APK file not found in bin/ directory!"
+          ls -la bin/
           exit 1
         fi
         
-        # Копируем APK файл
-        mkdir -p artifacts
-        cp bin/*.apk artifacts/ceiling_calculator.apk
         echo "APK file size: $(du -h artifacts/ceiling_calculator.apk)"
+        echo "Build completed successfully!"
+    
+    - name: Verify APK exists
+      run: |
+        if [ -f artifacts/ceiling_calculator.apk ]; then
+          echo "✅ APK file found and ready for upload"
+          ls -la artifacts/
+        else
+          echo "❌ APK file not found!"
+          ls -la bin/
+          exit 1
+        fi
     
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
