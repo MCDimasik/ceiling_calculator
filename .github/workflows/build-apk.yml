@@ -1,27 +1,25 @@
-name: Build APK with Buildozer Action
+name: Build APK with Docker Buildozer
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-android:
-    name: Build for Android
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          command: buildozer android debug
-          workdir: .
-          buildozer_version: stable
+      - name: Build APK with Buildozer Docker
+        run: |
+          docker run --rm \
+            -v $PWD:/home/user/app \
+            kivy/buildozer \
+            bash -c "cd /home/user/app && buildozer android debug"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ceiling-calculator-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
