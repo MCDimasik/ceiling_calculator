@@ -1,4 +1,4 @@
-name: Build APK - FINAL WORKING VERSION
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: '3.10'
     
-    - name: Clean up disk space aggressively
+    - name: Clean up disk space
       run: |
         sudo docker image prune --all --force
         sudo apt-get clean
@@ -27,9 +27,8 @@ jobs:
         sudo rm -rf /usr/share/swift /usr/local/.ghcup
         sudo rm -rf /usr/local/lib/node_modules
         sudo apt-get autoremove --purge -y
-        df -h
     
-    - name: Install essential system dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
@@ -42,7 +41,7 @@ jobs:
           cmake curl wget gnupg libc++-dev libc++abi-dev build-essential \
           software-properties-common libncurses-dev
     
-    - name: Create requirements.txt with pinned versions
+    - name: Create requirements.txt
       run: |
         echo "kivy==2.1.0" > requirements.txt
         echo "kivymd==1.1.1" >> requirements.txt
@@ -50,42 +49,40 @@ jobs:
         echo "cython==0.29.33" >> requirements.txt
         echo "buildozer==1.5.0" >> requirements.txt
     
-    - name: Install Python dependencies
+    - name: Install Python packages
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Create corrected buildozer.spec
+    - name: Create buildozer.spec
       run: |
-        cat > buildozer.spec <<EOF
-[app]
-title = Ceiling Calculator
-package.name = ceiling_calculator
-package.domain = org.test
-source.dir = .
-source.include_exts = py,png,jpg,kv,ttf,db
-version = 0.1
-requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0
-orientation = portrait
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
-android.archs = arm64-v8a
-android.api = 33
-android.minapi = 24
-android.sdk = 33
-android.ndk = 25b
-android.gradle_dependencies = com.google.android.material:material:1.8.0
-android.enable_androidx = True
-p4a.branch = master
-debug = 1
-
-[buildozer]
-log_level = 2
-warn_on_root = 1
-android.sdk_path = /opt/android-sdk
-android.ndk_path = /opt/android-sdk/ndk/25.1.8937393
-EOF
+        echo "[app]" > buildozer.spec
+        echo "title = Ceiling Calculator" >> buildozer.spec
+        echo "package.name = ceiling_calculator" >> buildozer.spec
+        echo "package.domain = org.test" >> buildozer.spec
+        echo "source.dir = ." >> buildozer.spec
+        echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
+        echo "version = 0.1" >> buildozer.spec
+        echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
+        echo "orientation = portrait" >> buildozer.spec
+        echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+        echo "android.archs = arm64-v8a" >> buildozer.spec
+        echo "android.api = 33" >> buildozer.spec
+        echo "android.minapi = 24" >> buildozer.spec
+        echo "android.sdk = 33" >> buildozer.spec
+        echo "android.ndk = 25b" >> buildozer.spec
+        echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
+        echo "android.enable_androidx = True" >> buildozer.spec
+        echo "p4a.branch = master" >> buildozer.spec
+        echo "debug = 1" >> buildozer.spec
+        echo "" >> buildozer.spec
+        echo "[buildozer]" >> buildozer.spec
+        echo "log_level = 2" >> buildozer.spec
+        echo "warn_on_root = 1" >> buildozer.spec
+        echo "android.sdk_path = /opt/android-sdk" >> buildozer.spec
+        echo "android.ndk_path = /opt/android-sdk/ndk/25.1.8937393" >> buildozer.spec
     
-    - name: Install Android SDK with correct versions
+    - name: Install Android SDK
       run: |
         sudo mkdir -p /opt/android-sdk
         sudo chown -R $USER:$USER /opt/android-sdk
@@ -99,22 +96,20 @@ EOF
         mkdir -p $ANDROID_HOME/licenses
         echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
         echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        yes | sdkmanager --licenses >/dev/null
-        sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" "cmdline-tools;latest" --sdk_root=$ANDROID_HOME
-        sdkmanager --list_installed --sdk_root=$ANDROID_HOME
+        yes | sdkmanager --licenses >/dev/null 2>&1 || true
+        sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" "cmdline-tools;latest" --sdk_root=$ANDROID_HOME >/dev/null 2>&1
     
-    - name: Set environment variables permanently
+    - name: Set environment variables
       run: |
         echo "ANDROID_HOME=/opt/android-sdk" >> $GITHUB_ENV
         echo "PATH=$PATH:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools" >> $GITHUB_ENV
-        echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
     
-    - name: Pre-build cleanup
+    - name: Clean build directory
       run: |
         rm -rf ~/.buildozer
         mkdir -p ~/.buildozer/android/platform
     
-    - name: Build APK with correct configuration
+    - name: Build APK
       env:
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
@@ -123,63 +118,19 @@ EOF
       run: |
         export PATH="$PATH:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
         export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
-        echo "Starting build process"
-        echo "Android SDK path: $ANDROID_HOME"
-        echo "Java home: $JAVA_HOME"
-        echo "PATH: $PATH"
-        echo "=== BUILD ATTEMPT 1 ==="
         buildozer -v android debug || {
-          echo "First attempt failed. Cleaning up..."
           buildozer android clean
-          echo "=== BUILD ATTEMPT 2 ==="
           buildozer -v android debug || {
-            echo "Second attempt failed. Full cleanup..."
             rm -rf ~/.buildozer
             mkdir -p ~/.buildozer/android/platform
-            echo "=== BUILD ATTEMPT 3 ==="
-            buildozer -v android debug || {
-              echo "=== FINAL BUILD FAILED ==="
-              echo "Buildozer version: $(buildozer --version 2>/dev/null || echo 'not found')"
-              echo "Python version: $(python --version 2>&1)"
-              echo "Java version: $(java -version 2>&1)"
-              echo "Android SDK contents:"
-              ls -la /opt/android-sdk || true
-              echo "NDK directory:"
-              ls -la /opt/android-sdk/ndk || true
-              echo "Last 300 lines of build log:"
-              find ~/.buildozer -name "*.log" -exec tail -300 {} \; || true
-              exit 1
-            }
+            buildozer -v android debug || exit 1
           }
         }
-        APK_FILE=$(find . -name "*.apk" -type f 2>/dev/null | grep -v "build/" | head -1)
-        if [ -z "$APK_FILE" ]; then
-          echo "ERROR: APK file not found!"
-          echo "Contents of bin directory:"
-          ls -la bin/ || true
-          echo "Full file search:"
-          find . -name "*.apk" -ls || true
-          exit 1
-        fi
+        APK_FILE=$(find . -name "*.apk" -type f -not -path "*build*" 2>/dev/null | head -1)
         mkdir -p artifacts
         cp "$APK_FILE" artifacts/ceiling_calculator.apk
-        echo "APK size: $(du -h artifacts/ceiling_calculator.apk)"
     
-    - name: Verify APK
-      run: |
-        if [ ! -f artifacts/ceiling_calculator.apk ]; then
-          echo "APK not found!"
-          exit 1
-        fi
-        sudo apt-get update && sudo apt-get install -y file
-        if ! file artifacts/ceiling_calculator.apk | grep -q "Android package"; then
-          echo "Invalid APK file!"
-          file artifacts/ceiling_calculator.apk
-          exit 1
-        fi
-        echo "APK validation successful"
-    
-    - name: Upload APK artifact
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: ceiling-calculator-apk
