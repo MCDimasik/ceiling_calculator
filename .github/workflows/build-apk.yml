@@ -71,15 +71,17 @@ jobs:
           libc++-dev \
           libc++abi-dev \
           build-essential
-    
+
     - name: Create requirements.txt
       run: |
-        echo "kivy==2.1.0" > requirements.txt
-        echo "kivymd==1.1.1" >> requirements.txt
-        echo "pillow==9.5.0" >> requirements.txt
-        echo "cython==0.29.33" >> requirements.txt
-        echo "buildozer==1.5.0" >> requirements.txt
-    
+        cat > requirements.txt <<EOF
+        kivy==2.1.0
+        kivymd==1.1.1
+        pillow==9.5.0
+        cython==0.29.33
+        buildozer==1.5.0
+        EOF
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
@@ -101,153 +103,89 @@ jobs:
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
         android.api = 31
         android.minapi = 21
-        android.ndk = 25.1.8937393
+        # ЯВНО УКАЗЫВАЕМ ВЕРСИЮ BUILD-TOOLS
+        android.sdk.build-tools = 31.0.0
+        # ФИКСИРУЕМ ПУТИ К SDK И NDK
+        android.sdk_path = /home/runner/android-sdk
+        android.ndk_path = /home/runner/android-sdk/ndk/23.1.7779620
+        android.ndk = 23.1.7779620
+        android.gradle_dependencies = 'com.google.android.material:material:1.8.0'
         android.enable_androidx = True
-        p4a.branch = master
+        # УДАЛЯЕМ НЕСТАБИЛЬНУЮ ВЕТКУ
+        # p4a.branch = master
         debug = 1
-        
+
         [buildozer]
         log_level = 2
         warn_on_root = 1
         android.adb_path = /usr/bin/adb
+        # ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ДЛЯ CI
+        android.accept_sdk_license = True
+        android.accept_sdk_preview_license = True
         EOF
     
     - name: Set up Android SDK properly
       run: |
-        # Create Android SDK directory structure
+        # Создаем правильную структуру SDK
         mkdir -p $HOME/android-sdk/cmdline-tools
         cd $HOME/android-sdk/cmdline-tools
         
-        # Download and extract Android command line tools
         wget https://dl.google.com/android/repository/commandlinetools-linux-9123335_latest.zip
-        unzip commandlinetools-linux-9123335_latest.zip
-        
-        # Rename the extracted folder to 'latest' as required by sdkmanager
+        unzip -q commandlinetools-linux-9123335_latest.zip
         mv cmdline-tools latest
         
-        # Set environment variables
-        export ANDROID_HOME=$HOME/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        
-        # Make directories for SDK components
-        mkdir -p $ANDROID_HOME/platform-tools
-        mkdir -p $ANDROID_HOME/build-tools
-        mkdir -p $ANDROID_HOME/platforms
-        
-        # Save environment variables for future steps
-        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "PATH=$PATH" >> $GITHUB_ENV
-
-    - name: Cache Android SDK
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.android/cache
-          ~/android-sdk
-          ~/.buildozer
-        key: android-sdk-${{ runner.os }}        
+        # Устанавливаем переменные окружения
+        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
     
-    - name: Accept Android SDK licenses and install tools
+    - name: Accept Android SDK licenses
+      env:
+        ANDROID_HOME: $HOME/android-sdk
+        ANDROID_SDK_ROOT: $HOME/android-sdk
       run: |
-        export ANDROID_HOME=$HOME/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        # Принимаем ВСЕ лицензии
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
         
-        # Создаем все необходимые файлы лицензий
-        mkdir -p $ANDROID_HOME/licenses
-        cat > $ANDROID_HOME/licenses/android-sdk-license << EOF
-    8933bad161af4178b1185d1a37fbf41ea5269c55
-    d56f5187479451eabf01fb78af6dfcb131a6481e
-    EOF
-        
-        cat > $ANDROID_HOME/licenses/android-sdk-preview-license << EOF
-    84831b9409646a918e30573bab4c9c91346d8abd
-    EOF
-        
-        cat > $ANDROID_HOME/licenses/android-googletv-license << EOF
-    601085b94cd77f0b54ff86406957099ebe79c4d6
-    EOF
-        
-        # Устанавливаем только необходимые компоненты
-        yes | sdkmanager --verbose \
+        # Устанавливаем ТОЧНЫЕ версии компонентов
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           "platform-tools" \
-          "platforms;android-33" \
           "platforms;android-31" \
-          "build-tools;33.0.2" \
           "build-tools;31.0.0" \
-          "ndk;25.1.8937393" \
-          "cmdline-tools;latest" \
+          "ndk;23.1.7779620" \
           "cmake;3.22.1" \
-          "patcher;v4" 2>/dev/null || echo "patcher;v4 not found, skipping"
-        
-        # Устанавливаем build-tools 36.1.0 отдельно (если требуется)
-        sdkmanager "build-tools;36.0.0" || echo "build-tools;36.0.0 not available"
-        
-        # Проверяем установленные компоненты
-        echo "=== Installed packages ==="
-        sdkmanager --list_installed | grep -E "(platform|build-tools|ndk|cmdline-tools)"
+          "lldb;3.1" >/dev/null
     
     - name: Clean up Android SDK cache
       run: |
-        export ANDROID_HOME=$HOME/android-sdk
-        sudo apt-get clean
-        rm -rf $ANDROID_HOME/.cache
+        rm -rf $HOME/android-sdk/.cache
         rm -rf ~/.gradle/caches
     
-    - name: Build APK with verbose logging and retries
+    - name: Build APK
       env:
+        ANDROID_HOME: $HOME/android-sdk
+        ANDROID_SDK_ROOT: $HOME/android-sdk
         JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
         GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
-        P4A_USE_ANDROID_NDK: "True"
-        P4A_BUILD_RETRIES: "3"
       run: |
-        export ANDROID_HOME=$HOME/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        export P4A_USE_SETUP_PYTHON=1
+        # Проверяем установку компонентов
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed | grep -E "build-tools|ndk|cmake"
         
-        # First attempt
-        echo "Starting build attempt 1..."
-        buildozer -v android debug || {
-          echo "First build attempt failed. Cleaning and retrying..."
-          buildozer android clean
-          
-          # Second attempt
-          echo "Starting build attempt 2..."
-          buildozer -v android debug || {
-            echo "Second build attempt failed. Full clean and final attempt..."
-            rm -rf ~/.buildozer
-            mkdir -p ~/.buildozer/android/platform
-            
-            # Third attempt
-            echo "Starting build attempt 3..."
-            buildozer -v android debug || {
-              echo "All build attempts failed!"
-              exit 1
-            }
-          }
-        }
+        # Запускаем сборку
+        buildozer -v android debug
         
-        # Copy APK to artifacts directory
+        # Копируем APK
         mkdir -p artifacts
-        find bin/ -name "*.apk" -exec cp {} artifacts/ceiling_calculator.apk \;
-        if [ ! -f artifacts/ceiling_calculator.apk ]; then
-          echo "APK file not found in bin/ directory!"
+        APK_PATH=$(find bin/ -name "*.apk" | head -1)
+        if [ -z "$APK_PATH" ]; then
+          echo "APK not found in bin/ directory!"
           ls -la bin/
           exit 1
         fi
-        
-        echo "APK file size: $(du -h artifacts/ceiling_calculator.apk)"
-        echo "Build completed successfully!"
-    
-    - name: Verify APK exists
-      run: |
-        if [ -f artifacts/ceiling_calculator.apk ]; then
-          echo "✅ APK file found and ready for upload"
-          ls -la artifacts/
-        else
-          echo "❌ APK file not found!"
-          ls -la bin/
-          exit 1
-        fi
+        cp "$APK_PATH" artifacts/ceiling_calculator.apk
+        echo "APK built successfully at $(pwd)/artifacts/ceiling_calculator.apk"
+        ls -lh artifacts/
     
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
