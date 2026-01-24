@@ -1,4 +1,4 @@
-name: Build APK - Working Version with System SDK
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -11,22 +11,11 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: true
     
     - name: Set up Python 3.10
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
-    - name: Clean up disk space
-      run: |
-        sudo docker image prune --all --force
-        sudo apt-get clean
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "$AGENT_TOOLSDIRECTORY"
-        sudo rm -rf /usr/share/swift /usr/local/.ghcup
-        sudo rm -rf /usr/local/lib/node_modules
-        sudo apt-get autoremove --purge -y
     
     - name: Install system dependencies
       run: |
@@ -48,7 +37,6 @@ jobs:
         echo "pillow==9.5.0" >> requirements.txt
         echo "cython==0.29.33" >> requirements.txt
         echo "buildozer==1.5.0" >> requirements.txt
-        echo "python-for-android" >> requirements.txt
     
     - name: Install Python packages
       run: |
@@ -67,179 +55,58 @@ jobs:
         echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
         echo "orientation = portrait" >> buildozer.spec
         echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
-        echo "android.archs = arm64-v8a" >> buildozer.spec
-        echo "android.api = 33" >> buildozer.spec
-        echo "android.minapi = 24" >> buildozer.spec
-        echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
+        echo "android.arch = arm64-v8a" >> buildozer.spec
+        echo "android.api = 31" >> buildozer.spec
+        echo "android.minapi = 21" >> buildozer.spec
+        echo "android.ndk = 21b" >> buildozer.spec
+        echo "android.sdk = 31" >> buildozer.spec
+        echo "android.gradle_dependencies = 'com.google.android.material:material:1.8.0'" >> buildozer.spec
         echo "android.enable_androidx = True" >> buildozer.spec
         echo "p4a.branch = master" >> buildozer.spec
-        echo "android.sdk = 33" >> buildozer.spec
-        echo "debug = 1" >> buildozer.spec
-        echo "" >> buildozer.spec
-        echo "# FORCE USE SYSTEM SDK" >> buildozer.spec
-        echo "android.sdk_path = /home/runner/android-sdk" >> buildozer.spec
-        echo "android.ndk_path = /home/runner/android-sdk/ndk/25.1.8937393" >> buildozer.spec
-        echo "android.ant_path = /usr/bin/ant" >> buildozer.spec
         echo "" >> buildozer.spec
         echo "[buildozer]" >> buildozer.spec
         echo "log_level = 2" >> buildozer.spec
         echo "warn_on_root = 1" >> buildozer.spec
     
-    - name: Install Ant and set up system SDK
+    - name: Install Android SDK with licenses
+      env:
+        ANDROID_HOME: $HOME/android-sdk
       run: |
-        # Install Ant
-        sudo apt-get install -y ant
+        # Создаем структуру каталогов
+        mkdir -p $ANDROID_HOME/cmdline-tools
         
-        # Create Android SDK directory
-        mkdir -p $HOME/android-sdk
+        # Скачиваем tools
+        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-9477386_latest.zip -d $ANDROID_HOME/cmdline-tools
+        mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
         
-        # Download and extract command line tools
-        cd /tmp
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        mkdir -p $HOME/android-sdk/cmdline-tools
-        mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        # РУЧНОЕ принятие лицензий (самый надежный способ)
+        mkdir -p $ANDROID_HOME/licenses
+        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
         
-        # Set environment variables
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        # Настраиваем PATH
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        # Accept ALL Android SDK licenses PROPERLY
-        mkdir -p $ANDROID_HOME/licenses
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        echo "d975f751698a77b662f1254ddbeed3901e976f5a" > $ANDROID_HOME/licenses/intel-android-extra-license
+        # Дополнительно принимаем лицензии через sdkmanager
+        yes | sdkmanager --licenses >/dev/null 2>&1 || true
         
-        # Install SPECIFIC versions that work with Buildozer
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" --sdk_root=$ANDROID_HOME
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-33" --sdk_root=$ANDROID_HOME
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "build-tools;33.0.2" --sdk_root=$ANDROID_HOME
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.1.8937393" --sdk_root=$ANDROID_HOME
+        # Устанавливаем ПРОВЕРЕННЫЕ версии компонентов
+        sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;21.4.7075529" --sdk_root=$ANDROID_HOME
         
-        # Verify installation
-        echo "Android SDK installed at: $ANDROID_HOME"
-        echo "Build-tools 33.0.2 exists: $(ls -la $ANDROID_HOME/build-tools/33.0.2/aidl 2>/dev/null && echo 'YES' || echo 'NO')"
+        # Проверяем установку
+        echo "Installed SDK components:"
+        sdkmanager --list_installed --sdk_root=$ANDROID_HOME
     
-    - name: Configure environment for Buildozer
+    - name: Set environment variables
+      env:
+        ANDROID_HOME: $HOME/android-sdk
       run: |
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/25.1.8937393" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_ENV
-        
-        # Create symlink for aidl so buildozer can find it
-        sudo ln -sf $HOME/android-sdk/build-tools/33.0.2/aidl /usr/local/bin/aidl 2>/dev/null || true
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
     
-    - name: Clean and prepare build environment
-      run: |
-        # Clean everything
-        rm -rf ~/.buildozer
-        rm -rf ~/.android
-        rm -rf .buildozer
-        
-        # Create buildozer directory structure
-        mkdir -p ~/.buildozer/android/platform
-        
-        # Tell buildozer to use system SDK
-        echo "[app]" > ~/.buildozer/config.ini
-        echo "android.sdk_path = $HOME/android-sdk" >> ~/.buildozer/config.ini
-        echo "android.ndk_path = $HOME/android-sdk/ndk/25.1.8937393" >> ~/.buildozer/config.ini
-    
-    - name: Build APK with system SDK
+    - name: Build APK
       env:
-        BUILD_WITH_SYSTEM_SDK: 1
-        P4A_USE_ANDROID_NDK: 1
-        P4A_ANDROID_NDK: /home/runner/android-sdk/ndk/25.1.8937393
-        P4A_ANDROID_SDK: /home/runner/android-sdk
-        ANDROID_HOME: /home/runner/android-sdk
-        ANDROID_SDK_ROOT: /home/runner/android-sdk
-        ANDROID_NDK_HOME: /home/runner/android-sdk/ndk/25.1.8937393
-        JAVA_OPTS: "-Xmx4096M -XX:MaxMetaspaceSize=1024M"
-        GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+        ANDROID_HOME: $HOME/android-sdk
       run: |
-        # Set paths
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
-        export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/33.0.2
-        
-        # CRITICAL: Set environment variables for buildozer to skip SDK download
-        export BUILD_WITH_SYSTEM_SDK=1
-        export P4A_USE_ANDROID_NDK=1
-        export P4A_ANDROID_NDK=$ANDROID_NDK_HOME
-        export P4A_ANDROID_SDK=$ANDROID_HOME
-        export P4A_RELEASE_NDK=1
-        
-        echo "=== BUILD START ==="
-        echo "Android SDK: $ANDROID_HOME"
-        echo "Android NDK: $ANDROID_NDK_HOME"
-        echo "Using system SDK: $BUILD_WITH_SYSTEM_SDK"
-        
-        # Verify AIDL is accessible
-        which aidl || {
-          echo "Creating symlink for AIDL..."
-          sudo ln -sf $ANDROID_HOME/build-tools/33.0.2/aidl /usr/local/bin/aidl
-        }
-        
-        # Create a wrapper script to prevent SDK download
-        cat > buildozer_wrapper.py << 'EOF'
-import os
-import sys
-from buildozer.scripts.client import main
-
-# Force use of system SDK
-os.environ['BUILD_WITH_SYSTEM_SDK'] = '1'
-os.environ['P4A_USE_ANDROID_NDK'] = '1'
-os.environ['P4A_ANDROID_NDK'] = os.path.expanduser('~/android-sdk/ndk/25.1.8937393')
-os.environ['P4A_ANDROID_SDK'] = os.path.expanduser('~/android-sdk')
-os.environ['ANDROID_HOME'] = os.path.expanduser('~/android-sdk')
-os.environ['ANDROID_SDK_ROOT'] = os.path.expanduser('~/android-sdk')
-
-sys.exit(main())
-EOF
-        
-        # Build with verbose output
-        echo "Starting build..."
-        python buildozer_wrapper.py -v android debug 2>&1 | tee build.log
-        
-        # Check if build succeeded
-        if grep -q "BUILD SUCCESSFUL" build.log || [ -n "$(find . -name '*.apk' -type f 2>/dev/null | head -1)" ]; then
-          echo "Build appears successful!"
-        else
-          echo "Build may have failed, trying alternative approach..."
-          # Try direct build with system SDK
-          buildozer -v android debug 2>&1 | tail -100 || {
-            echo "Build failed, showing error log:"
-            tail -200 build.log
-            exit 1
-          }
-        fi
-        
-        # Find and copy APK
-        APK_FILE=$(find . -name "*.apk" -type f 2>/dev/null | head -1)
-        if [ -z "$APK_FILE" ]; then
-          # Check in bin directory
-          APK_FILE=$(find bin -name "*.apk" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$APK_FILE" ]; then
-          echo "APK found: $APK_FILE"
-          mkdir -p artifacts
-          cp "$APK_FILE" artifacts/ceiling_calculator.apk
-          echo "APK size: $(du -h artifacts/ceiling_calculator.apk | cut -f1)"
-        else
-          echo "ERROR: APK file not found!"
-          echo "Listing build directory:"
-          ls -la bin/ 2>/dev/null || true
-          echo "Full search:"
-          find . -name "*.apk" -ls 2>/dev/null || true
-          exit 1
-        fi
-    
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: ceiling-calculator-apk
-        path: artifacts/ceiling_calculator.apk
-        retention-days: 7
+        buildozer -v android debug
