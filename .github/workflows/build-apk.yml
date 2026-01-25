@@ -1,52 +1,108 @@
-name: Simple Kivy Build
+name: Build APK - Direct Docker Buildozer
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Setup Python 3.8
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.8'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-pip python3-dev git openjdk-8-jdk
-        
-    - name: Install Buildozer
-      run: pip3 install buildozer
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
     
     - name: Create buildozer.spec
       run: |
-        buildozer init || true
-        # Минимальная конфигурация
-        echo "requirements = python3,kivy" > buildozer.spec
-        echo "android.archs = arm64-v8a" >> buildozer.spec
-        echo "android.api = 30" >> buildozer.spec
-    
-    - name: Build APK
-      run: |
-        # Собираем с выводом логов
-        buildozer android debug 2>&1 | tail -100
-        
-        # Проверяем результат
-        if [ -f bin/*.apk ]; then
-          echo "APK built successfully"
-          mkdir -p artifacts
-          cp bin/*.apk artifacts/app.apk
-        else
-          echo "Build failed"
-          exit 1
+        if [ ! -f buildozer.spec ]; then
+          echo "[app]" > buildozer.spec
+          echo "title = Ceiling Calculator" >> buildozer.spec
+          echo "package.name = ceiling_calculator" >> buildozer.spec
+          echo "package.domain = org.test" >> buildozer.spec
+          echo "source.dir = ." >> buildozer.spec
+          echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
+          echo "version = 0.1" >> buildozer.spec
+          echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,android,pillow==9.5.0" >> buildozer.spec
+          echo "orientation = portrait" >> buildozer.spec
+          echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+          echo "android.archs = arm64-v8a" >> buildozer.spec
+          echo "android.api = 33" >> buildozer.spec
+          echo "android.minapi = 24" >> buildozer.spec
+          echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
+          echo "android.enable_androidx = True" >> buildozer.spec
+          echo "p4a.branch = master" >> buildozer.spec
+          echo "android.sdk = 33" >> buildozer.spec
+          echo "android.ndk = 25.1.8937393" >> buildozer.spec
+          echo "debug = 1" >> buildozer.spec
+          echo "" >> buildozer.spec
+          echo "[buildozer]" >> buildozer.spec
+          echo "log_level = 2" >> buildozer.spec
+          echo "warn_on_root = 1" >> buildozer.spec
         fi
     
-    - name: Upload APK
+    - name: Build with Docker Buildozer
+      run: |
+        # Создаем директорию для кэша Buildozer
+        mkdir -p /tmp/.buildozer_cache
+        
+        echo "=== Starting Docker Buildozer ==="
+        
+        # Запускаем сборку через Docker
+        docker run --rm \
+          -v "$PWD":/home/user/hostcwd \
+          -v "/tmp/.buildozer_cache":/home/user/.buildozer \
+          -w /home/user/hostcwd \
+          kivy/buildozer:latest \
+          bash -c "
+            echo '=== Inside Docker container ==='
+            echo 'Current directory:'
+            pwd
+            ls -la
+            
+            echo 'Creating Android licenses...'
+            mkdir -p /home/user/.android/licenses
+            echo '24333f8a63b6825ea9c5514f83c2829b004d1fee' > /home/user/.android/licenses/android-sdk-license
+            echo '84831b9409646a918e30573bab4c9c91346d8abd' > /home/user/.android/licenses/android-sdk-preview-license
+            
+            echo 'Starting Buildozer...'
+            buildozer -v android debug
+          "
+        
+        # Проверяем результат
+        echo "=== Checking for APK ==="
+        if [ -f bin/*.apk ]; then
+          echo "✅ APK successfully built!"
+          APK_FILE=$(ls bin/*.apk | head -1)
+          echo "APK file: $APK_FILE"
+          mkdir -p artifacts
+          cp "$APK_FILE" artifacts/ceiling_calculator.apk
+          echo "apk_path=artifacts/ceiling_calculator.apk" >> $GITHUB_OUTPUT
+        else
+          echo "❌ APK file not found in bin directory"
+          echo "Searching for APK files..."
+          find . -name "*.apk" -type f 2>/dev/null | while read file; do
+            echo "Found: $file"
+            mkdir -p artifacts
+            cp "$file" artifacts/ceiling_calculator.apk
+            echo "apk_path=artifacts/ceiling_calculator.apk" >> $GITHUB_OUTPUT
+            break
+          done
+          
+          if [ ! -f "artifacts/ceiling_calculator.apk" ]; then
+            echo "No APK files found anywhere!"
+            exit 1
+          fi
+        fi
+      id: build
+    
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: app-apk
-        path: artifacts/*.apk
+        name: ceiling-calculator-apk
+        path: ${{ steps.build.outputs.apk_path }}
+        retention-days: 7
