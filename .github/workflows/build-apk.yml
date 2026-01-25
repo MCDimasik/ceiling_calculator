@@ -1,25 +1,52 @@
-name: Build with Community Buildozer Action
+name: Simple Kivy Build
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
-  build-android:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
-    - name: Build with Buildozer
-      uses: ArtemSBulgakov/buildozer-action@v1
+    - name: Setup Python 3.8
+      uses: actions/setup-python@v5
       with:
-        command: buildozer android debug
-        buildozer_version: 1.4.0
-        workdir: .
+        python-version: '3.8'
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-dev git openjdk-8-jdk
+        
+    - name: Install Buildozer
+      run: pip3 install buildozer
+    
+    - name: Create buildozer.spec
+      run: |
+        buildozer init || true
+        # Минимальная конфигурация
+        echo "requirements = python3,kivy" > buildozer.spec
+        echo "android.archs = arm64-v8a" >> buildozer.spec
+        echo "android.api = 30" >> buildozer.spec
+    
+    - name: Build APK
+      run: |
+        # Собираем с выводом логов
+        buildozer android debug 2>&1 | tail -100
+        
+        # Проверяем результат
+        if [ -f bin/*.apk ]; then
+          echo "APK built successfully"
+          mkdir -p artifacts
+          cp bin/*.apk artifacts/app.apk
+        else
+          echo "Build failed"
+          exit 1
+        fi
     
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: app
-        path: bin/*.apk
+        name: app-apk
+        path: artifacts/*.apk
