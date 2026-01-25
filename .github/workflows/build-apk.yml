@@ -1,4 +1,4 @@
-name: Build APK - FIXED SYNTAX
+name: Build APK - Working Version
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Set up Python 3.10
+    - name: Setup Python 3.10
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
@@ -20,108 +20,73 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          git zip unzip openjdk-17-jdk python3-dev autoconf libtool pkg-config \
-          libssl-dev libffi-dev libbz2-dev libsqlite3-dev libncurses5-dev \
-          libncursesw5-dev zlib1g-dev libreadline-dev liblzma-dev libxml2-dev \
-          libxslt1-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev \
-          libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev \
-          libavcodec-dev libjpeg-dev libpng-dev libgles2-mesa-dev patchelf \
-          cmake curl wget gnupg libc++-dev libc++abi-dev build-essential \
-          software-properties-common libncurses-dev lib32z1 lib32stdc++6
+        sudo apt-get install -y git openjdk-11-jdk python3-dev python3-pip zlib1g-dev libncurses5-dev libssl-dev libffi-dev
     
-    - name: Create requirements.txt
-      run: |
-        echo "kivy==2.1.0" > requirements.txt
-        echo "kivymd==1.1.1" >> requirements.txt
-        echo "pillow==9.5.0" >> requirements.txt
-        echo "cython==0.29.33" >> requirements.txt
-        echo "buildozer==1.5.0" >> requirements.txt
-    
-    - name: Install Python packages
+    - name: Install Buildozer
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install buildozer
+        pip install cython
     
     - name: Create buildozer.spec
       run: |
-        echo "[app]" > buildozer.spec
-        echo "title = Ceiling Calculator" >> buildozer.spec
-        echo "package.name = ceiling_calculator" >> buildozer.spec
-        echo "package.domain = org.test" >> buildozer.spec
-        echo "source.dir = ." >> buildozer.spec
-        echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
-        echo "version = 0.1" >> buildozer.spec
-        echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
-        echo "orientation = portrait" >> buildozer.spec
-        echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
-        echo "android.arch = arm64-v8a" >> buildozer.spec
-        echo "android.api = 31" >> buildozer.spec
-        echo "android.minapi = 21" >> buildozer.spec
-        echo "android.ndk = 25b" >> buildozer.spec
-        echo "android.sdk = 31" >> buildozer.spec
-        echo "android.gradle_dependencies = 'com.google.android.material:material:1.8.0'" >> buildozer.spec
-        echo "android.enable_androidx = True" >> buildozer.spec
-        echo "p4a.branch = master" >> buildozer.spec
-        echo "" >> buildozer.spec
-        echo "[buildozer]" >> buildozer.spec
-        echo "log_level = 2" >> buildozer.spec
-        echo "warn_on_root = 1" >> buildozer.spec
+        if [ ! -f buildozer.spec ]; then
+          echo "[app]" > buildozer.spec
+          echo "title = Ceiling Calculator" >> buildozer.spec
+          echo "package.name = ceiling_calculator" >> buildozer.spec
+          echo "package.domain = org.test" >> buildozer.spec
+          echo "source.dir = ." >> buildozer.spec
+          echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
+          echo "version = 0.1" >> buildozer.spec
+          echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
+          echo "orientation = portrait" >> buildozer.spec
+          echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+          echo "android.archs = arm64-v8a" >> buildozer.spec
+          echo "android.api = 33" >> buildozer.spec
+          echo "android.minapi = 24" >> buildozer.spec
+          echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
+          echo "android.enable_androidx = True" >> buildozer.spec
+          echo "p4a.branch = master" >> buildozer.spec
+          echo "android.sdk = 33" >> buildozer.spec
+          echo "android.ndk = 25.1.8937393" >> buildozer.spec
+          echo "debug = 1" >> buildozer.spec
+          echo "" >> buildozer.spec
+          echo "[buildozer]" >> buildozer.spec
+          echo "log_level = 2" >> buildozer.spec
+          echo "warn_on_root = 1" >> buildozer.spec
+        fi
     
-    - name: Install Android SDK with CORRECT structure
-      env:
-        ANDROID_HOME: $HOME/android-sdk
+    - name: Accept Android licenses
       run: |
-        mkdir -p $ANDROID_HOME/cmdline-tools/latest/bin
-        mkdir -p $ANDROID_HOME/cmdline-tools/latest/lib
-        
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        
-        cp cmdline-tools/bin/* $ANDROID_HOME/cmdline-tools/latest/bin/
-        cp cmdline-tools/lib/* $ANDROID_HOME/cmdline-tools/latest/lib/
-        cp cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/ 2>/dev/null || true
-        
-        mkdir -p $ANDROID_HOME/licenses
-        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-        
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        chmod +x $ANDROID_HOME/cmdline-tools/latest/bin/*
-        
-        sdkmanager --version
-        
-        yes | sdkmanager --licenses >/dev/null 2>&1 || true
-        sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" "ndk;25.1.8937393" --sdk_root=$ANDROID_HOME
-    
-    - name: Set environment variables
-      run: |
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+        mkdir -p ~/.android/licenses
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" > ~/.android/licenses/android-sdk-preview-license
     
     - name: Build APK
-      env:
-        JAVA_OPTS: "-Xmx4096M"
-        ANDROID_HOME: $HOME/android-sdk
       run: |
-        export PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools
-        buildozer -v android debug
-    
-    - name: Find and upload APK
-      run: |
-        APK_FILE=$(find . -name "*.apk" -type f | head -1)
-        if [ -z "$APK_FILE" ]; then
-          echo "ERROR: APK file not found!"
-          find . -name "*.apk" -ls
-          exit 1
-        fi
+        echo "y" | buildozer android debug 2>&1 | tail -200
+        
         mkdir -p artifacts
-        cp "$APK_FILE" artifacts/ceiling_calculator.apk
-        echo "✅ APK built successfully: $APK_FILE"
+        if ls bin/*.apk 1>/dev/null 2>&1; then
+          echo "APK built successfully!"
+          cp bin/*.apk artifacts/ceiling_calculator.apk
+          echo "apk_path=artifacts/ceiling_calculator.apk" >> $GITHUB_OUTPUT
+        else
+          echo "Build may have failed, trying to find APK..."
+          find . -name "*.apk" -type f -exec cp {} artifacts/ceiling_calculator.apk \; 2>/dev/null || true
+          if [ -f "artifacts/ceiling_calculator.apk" ]; then
+            echo "Found APK!"
+            echo "apk_path=artifacts/ceiling_calculator.apk" >> $GITHUB_OUTPUT
+          else
+            echo "No APK found!"
+            exit 1
+          fi
+        fi
+      id: build
     
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: ceiling-calculator-apk
-        path: artifacts/ceiling_calculator.apk
+        path: ${{ steps.build.outputs.apk_path }}
         retention-days: 7
