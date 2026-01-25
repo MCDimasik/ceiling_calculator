@@ -1,201 +1,58 @@
-name: Build APK - FINAL SOLUTION
+name: Simple Kivy APK Build
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main, master ]
+on: workflow_dispatch
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
-    - name: Set up Python 3.10
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     
-    - name: Install system dependencies
+    - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           git zip unzip openjdk-17-jdk \
           python3-dev autoconf libtool pkg-config \
-          zlib1g-dev libncurses5-dev libncursesw5-dev \
+          zlib1g-dev libncurses5-dev \
           cmake libffi-dev libssl-dev \
-          curl wget software-properties-common \
-          build-essential patchelf \
-          libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+          curl wget automake
     
-    - name: Install Buildozer and Python packages
+    - name: Install Buildozer
       run: |
-        python -m pip install --upgrade pip
-        pip install buildozer==1.5.0
-        pip install cython==0.29.33
+        pip install buildozer
+        pip install cython
     
     - name: Create buildozer.spec
       run: |
         if [ ! -f buildozer.spec ]; then
-          echo "[app]" > buildozer.spec
-          echo "title = Ceiling Calculator" >> buildozer.spec
-          echo "package.name = ceiling_calculator" >> buildozer.spec
-          echo "package.domain = org.test" >> buildozer.spec
-          echo "source.dir = ." >> buildozer.spec
-          echo "source.include_exts = py,png,jpg,kv,ttf,db" >> buildozer.spec
-          echo "version = 0.1" >> buildozer.spec
-          echo "requirements = python3,kivy==2.1.0,kivymd==1.1.1,sqlite3,android,pillow==9.5.0" >> buildozer.spec
-          echo "orientation = portrait" >> buildozer.spec
-          echo "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE" >> buildozer.spec
+          buildozer init
+          # Простая конфигурация
+          sed -i '/^requirements = /d' buildozer.spec
+          echo "requirements = python3,kivy,kivymd,pillow" >> buildozer.spec
           echo "android.archs = arm64-v8a" >> buildozer.spec
           echo "android.api = 33" >> buildozer.spec
-          echo "android.minapi = 24" >> buildozer.spec
-          echo "android.gradle_dependencies = com.google.android.material:material:1.8.0" >> buildozer.spec
-          echo "android.enable_androidx = True" >> buildozer.spec
-          echo "p4a.branch = master" >> buildozer.spec
           echo "android.sdk = 33" >> buildozer.spec
-          echo "android.ndk = 25.1.8937393" >> buildozer.spec
-          echo "debug = 1" >> buildozer.spec
-          echo "" >> buildozer.spec
-          echo "[buildozer]" >> buildozer.spec
-          echo "log_level = 2" >> buildozer.spec
-          echo "warn_on_root = 1" >> buildozer.spec
+          echo "android.ndk = 23.1.7779620" >> buildozer.spec
         fi
     
-    - name: Pre-install Android SDK and accept licenses
+    - name: Build APK
       run: |
-        # Устанавливаем Android SDK Command Line Tools
-        mkdir -p $HOME/android-sdk
-        cd /tmp
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        mkdir -p $HOME/android-sdk/cmdline-tools
-        mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        # Даем ответы на все вопросы автоматически
+        echo "y" | buildozer android debug 2>&1 | tail -200
         
-        # Устанавливаем переменные окружения
-        export ANDROID_HOME=$HOME/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-        
-        # СОЗДАЕМ ВСЕ НЕОБХОДИМЫЕ ЛИЦЕНЗИИ
-        mkdir -p $ANDROID_HOME/licenses
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-        echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license  
-        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-        echo "601085b94cd77f0b54ff86406957099ebe79c4d6" > $ANDROID_HOME/licenses/android-googletv-license
-        
-        # Устанавливаем необходимые компоненты
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" --sdk_root=$ANDROID_HOME
-        
-        echo "✅ Android SDK установлен и лицензии приняты"
+        # Копируем APK
+        mkdir -p artifacts
+        cp bin/*.apk artifacts/app.apk 2>/dev/null || true
     
-    - name: Configure Buildozer to use system SDK
-      run: |
-        # Очищаем кэш Buildozer
-        rm -rf ~/.buildozer
-        
-        # Создаем директорию для кэша
-        mkdir -p ~/.buildozer
-        
-        # Устанавливаем переменные окружения на будущее
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-    
-    - name: Build APK with Buildozer
-      env:
-        # ПРИНУДИТЕЛЬНО заставляем Buildozer использовать системный SDK
-        BUILD_WITH_SYSTEM_SDK: 1
-        P4A_USE_ANDROID_NDK: 1
-        P4A_ANDROID_NDK: /home/runner/android-sdk/ndk/25.1.8937393
-        P4A_ANDROID_SDK: /home/runner/android-sdk
-        # Автоматически принимаем лицензии
-        BUILDOZER_ACCEPT_LICENSES: yes
-        JAVA_OPTS: "-Xmx4096M"
-        GRADLE_OPTS: "-Dorg.gradle.daemon=false"
-      run: |
-        # Экспортируем переменные в текущей сессии
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-        
-        # Критически важные переменные для Buildozer
-        export BUILD_WITH_SYSTEM_SDK=1
-        export P4A_USE_ANDROID_NDK=1
-        export P4A_ANDROID_NDK=$ANDROID_HOME/ndk/25.1.8937393
-        export P4A_ANDROID_SDK=$ANDROID_HOME
-        export P4A_RELEASE_NDK=1
-        
-        echo "=== НАЧАЛО СБОРКИ ==="
-        echo "Используем системный SDK: $ANDROID_HOME"
-        
-        # Первая попытка сборки с автоматическим принятием лицензий
-        echo "Попытка 1: Запускаем buildozer..."
-        
-        # Используем 'yes' для автоматических ответов на все вопросы
-        yes | buildozer -v android debug 2>&1 | tee build.log || {
-          echo "Попытка 1 не удалась. Пробуем с чисткой..."
-          
-          # Вторая попытка с чисткой
-          buildozer android clean
-          yes | buildozer -v android debug 2>&1 | tee -a build.log || {
-            echo "Попытка 2 не удалась. Пробуем третий раз..."
-            
-            # Третья попытка - полная переустановка
-            rm -rf ~/.buildozer
-            mkdir -p ~/.buildozer
-            yes | buildozer -v android debug 2>&1 | tee -a build.log
-          }
-        }
-        
-        # Проверяем успешность сборки
-        if [ -f "build.log" ] && (grep -q "BUILD SUCCESSFUL" build.log || grep -q "APK built" build.log); then
-          echo "✅ Сборка успешна!"
-        else
-          echo "❌ Возможные ошибки в сборке"
-          tail -100 build.log
-        fi
-        
-        # Ищем APK файл
-        APK_FILE=$(find . -name "*.apk" -type f 2>/dev/null | head -1)
-        if [ -z "$APK_FILE" ]; then
-          APK_FILE=$(find bin -name "*.apk" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$APK_FILE" ]; then
-          echo "✅ Найден APK: $APK_FILE"
-          mkdir -p artifacts
-          cp "$APK_FILE" artifacts/ceiling_calculator.apk
-          echo "apk_path=artifacts/ceiling_calculator.apk" >> $GITHUB_OUTPUT
-        else
-          echo "❌ APK не найден! Проверяем директории..."
-          echo "bin directory:"
-          ls -la bin/ 2>/dev/null || echo "bin directory not found"
-          echo "Current directory:"
-          find . -name "*.apk" -ls 2>/dev/null || echo "No APK files found"
-          echo "Последние 200 строк лога:"
-          tail -200 build.log || true
-          exit 1
-        fi
-      id: build
-    
-    - name: Upload APK artifact
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: ceiling-calculator-apk
-        path: ${{ steps.build.outputs.apk_path }}
-        retention-days: 7
-    
-    - name: Show build info
-      if: always()
-      run: |
-        echo "=== ИНФОРМАЦИЯ О СБОРКЕ ==="
-        echo "Статус: ${{ job.status }}"
-        echo "Время: $(date)"
-        if [ -f "build.log" ]; then
-          echo "Размер лога: $(wc -l < build.log) строк"
-          echo "Последние 50 строк:"
-          tail -50 build.log
-        fi
+        name: app-apk
+        path: artifacts/*.apk
