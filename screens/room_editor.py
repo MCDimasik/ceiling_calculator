@@ -7,9 +7,9 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 from kivy.metrics import dp
-from kivy.graphics import Color, Rectangle
 from kivy.uix.floatlayout import FloatLayout
 from widgets.grid_widget import GridWidget
+from kivy.uix.stencilview import StencilView
 from database import save_project # Импортируем функцию сохранения
 
 class RoomEditorScreen(Screen):
@@ -45,6 +45,7 @@ class RoomEditorScreen(Screen):
 
         # Обновляем информацию при изменении
         self.update_info()
+
 
     def on_pre_enter(self):
         """Вызывается перед входом на экран - загружаем комнату"""

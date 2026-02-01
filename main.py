@@ -1,29 +1,34 @@
-# main.py
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager
 from kivy.core.window import Window
-from kivy.utils import get_color_from_hex
+from kivy.utils import get_color_from_hex, platform  # ← ДОБАВЛЕН импорт platform
 # Импортируем экраны
 from screens.main_screen import MainScreen
 from screens.projects_screen import ProjectsScreen
 from screens.rooms_screen import RoomsScreen
 from screens.room_editor import RoomEditorScreen
 from screens.layout_screen import LayoutScreen
-
 import os
+
+# Это строка для отладки на Windows, на Android ломает рендеринг и координаты касаний, убрать перед сборкой
 os.environ['KIVY_GL_BACKEND'] = 'angle_sdl2'
 
-# Устанавливаем размер как у телефона
-Window.size = (360, 640)
+# Устанавливаем размер ТОЛЬКО для десктопа (на Android игнорируется и ломает координаты!)
+if platform != 'android':
+    Window.size = (320, 640)
+
 Window.clearcolor = (1, 1, 1, 1)  # Белый фон
 
 
 class CeilingCalculatorApp(App):
     def build(self):
-        # Создаем менеджер экранов с дополнительными свойствами
+        # ← КРИТИЧНО: настраиваем масштабирование ДО создания виджетов
+        if platform == 'android':
+            # Гарантируем полноэкранный режим с правильным масштабированием
+            Window.softinput_mode = 'below_target'  # Клавиатура не закроет поля ввода
+            
+        # Создаем менеджер экранов
         sm = ScreenManager()
-
-        # Добавляем возможность хранить текущий проект и комнату
         sm.current_project = None
         sm.current_room = None
 
@@ -32,9 +37,10 @@ class CeilingCalculatorApp(App):
         sm.add_widget(ProjectsScreen(name='projects'))
         sm.add_widget(RoomsScreen(name='rooms'))
         sm.add_widget(RoomEditorScreen(name='room_editor'))
-        sm.add_widget(LayoutScreen(name='layout'))  # Добавляем экран раскладки
+        sm.add_widget(LayoutScreen(name='layout'))
+        
+        # Применяем стиль
         Window.clearcolor = get_color_from_hex('#FFFFFF')
-        # Применяем стиль для кнопок
         self.theme_cls = type('Theme', (), {
             'primary_color': get_color_from_hex('#000000'),
             'text_color': get_color_from_hex('#000000')

@@ -19,6 +19,7 @@ class LayoutWidget(Widget):
     grid_offset_y = NumericProperty(0)
     on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
     dragging_enabled = BooleanProperty(True)
+    show_dimensions = BooleanProperty(True) 
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -38,6 +39,11 @@ class LayoutWidget(Widget):
         # Для перетаскивания
         self.dragging = False
         self.last_touch_pos = None
+
+        self.touches = {}
+        self.pinch_start_distance = None
+        self.pinch_start_scale = None
+        self.pinch_center = None
 
         # Цвета согласно редактору
         self.bg_color = (0.12, 0.13, 0.13, 1)      # #1e2022 - темный фон
@@ -165,26 +171,26 @@ class LayoutWidget(Widget):
 
     def draw_layout(self):
         self.canvas.clear()
-
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-
+            
             # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-
+            
             # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-
+            
             # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-
-            # 4. Рисуем цифры ПОСЛЕДНИМИ, поверх всего
-            self.draw_all_cut_dimensions()
+            
+            # 4. Рисуем цифры ТОЛЬКО если включено
+            if self.show_dimensions:  # ← УСЛОВИЕ ДОБАВЛЕНО
+                self.draw_all_cut_dimensions()
 
     def draw_all_cut_dimensions(self):
-        """Рисует размеры для ВСЕХ резаных плиток, показывая только обрезанные стороны"""
+        """Рисуем размеры резаных плиток с центрированием и адаптивным масштабированием"""
         if not self.layout or not self.layout.tiles:
             return
 
@@ -192,58 +198,69 @@ class LayoutWidget(Widget):
             if tile['type'] != 'cut':
                 continue
 
-            # Берем точные значения размеров
-            remaining_x = tile.get('cut_x', 60.0)  # Полезный размер X
-            remaining_y = tile.get('cut_y', 60.0)  # Полезный размер Y
+            remaining_x = tile.get('cut_x', 60.0)
+            remaining_y = tile.get('cut_y', 60.0)
 
-            # Определяем, какие размеры нужно отображать (только обрезанные стороны)
+            # Показываем только обрезанные стороны
             texts = []
-
-            # Показываем размер по X, только если он обрезан (меньше 59.5 см с погрешностью)
-            if remaining_x < 59.5:  # С небольшой погрешностью для учета округления
+            if remaining_x < 59.5:
                 texts.append(f"{int(round(remaining_x))}")
-
-            # Показываем размер по Y, только если он обрезан
             if remaining_y < 59.5:
                 texts.append(f"{int(round(remaining_y))}")
-
-            # Если обе стороны целые (или почти целые), не показываем ничего
             if not texts:
                 continue
 
-            # Формируем текст: если обе стороны обрезаны - показываем оба размера
-            if len(texts) == 2:
-                text = f"{texts[0]}×{texts[1]}"
-            else:
-                text = texts[0]
+            text = f"{texts[0]}×{texts[1]}" if len(texts) == 2 else texts[0]
 
-            # Центр плитки для позиционирования текста
+            # Центр плитки
             x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
             px_center = self.cm_to_px(center_x, center_y)
 
-            # Создаем текст с небольшим шрифтом
+            # 🔑 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: адаптивный размер шрифта в зависимости от длины текста
+            tile_height_px = 60 * self.scale  # Высота плитки в пикселях
+
+            # Для одиночных цифр — крупнее (70% высоты плитки)
+            # Для двойных цифр ("45×36") — мельче (50% высоты плитки)
+            # Это даёт визуально одинаковое заполнение пространства
+            if '×' in text:
+                font_scale = 0.30  # Двойные цифры — меньше шрифт
+            else:
+                font_scale = 0.50  # Одиночные цифры — крупнее
+
+            font_size = tile_height_px * font_scale
+
+            # Ограничиваем для читаемости и предотвращения перекрытия
+            # 8px минимум, 30px максимум
+            font_size = max(8, min(30, font_size))
+
+            # Создаём текст
             label = CoreLabel(
                 text=text,
-                font_size=9,
+                font_size=font_size,  # ← ЧИСЛО, не строка!
                 color=self.text_color,
                 bold=True
             )
             label.refresh()
 
-            # Центрируем текст в плитке
+            # Центрируем текст
             pos_x = px_center[0] - label.texture.size[0] / 2
             pos_y = px_center[1] - label.texture.size[1] / 2
 
-            # Рисуем полупрозрачный фон для читаемости
-            Color(0, 0, 0, 0.3)  # Черный с 30% прозрачности
+            # 🔑 УМЕНЬШЕННЫЕ отступы фона (5% вместо 8%) — чтобы не выходил за границы плитки
+            padding_x = label.texture.size[0] * 0.05
+            padding_y = label.texture.size[1] * 0.05
+
+            # Полупрозрачный фон с минимальными отступами
+            Color(0, 0, 0, 0.3)
             Rectangle(
-                pos=(pos_x - 2, pos_y - 1),
-                size=(label.texture.size[0] + 4, label.texture.size[1] + 2)
+                pos=(pos_x - padding_x, pos_y - padding_y),
+                size=(label.texture.size[0] + padding_x * 2,
+                      label.texture.size[1] + padding_y * 2)
             )
 
-            # Рисуем текст
+            # Текст поверх фона
             Color(*self.text_color)
             Rectangle(
                 texture=label.texture,
@@ -388,48 +405,6 @@ class LayoutWidget(Widget):
         # Используем оптимизированную перерисовку
         self.schedule_redraw()
 
-    def on_touch_move(self, touch):
-        """Обработка движения мыши/пальца с немедленным обновлением позиции"""
-        if not self.collide_point(*touch.pos):
-            return False
-
-        if hasattr(self, 'panning') and self.panning:
-            # Панорамирование
-            dx = touch.x - self.last_pan_pos[0]
-            dy = touch.y - self.last_pan_pos[1]
-            self.offset_x += dx
-            self.offset_y += dy
-            self.last_pan_pos = (touch.x, touch.y)
-            self.draw_layout()
-            return True
-
-        if hasattr(self, 'dragging') and self.dragging and self.dragging_enabled:
-            # Перетаскивание сетки - ИСПРАВЛЕНО: убираем округление и задержку
-            dx_px = touch.x - self.last_touch_pos[0]
-            dy_px = touch.y - self.last_touch_pos[1]
-
-            # Конвертируем в сантиметры БЕЗ округления
-            dx_cm = dx_px / self.scale
-            dy_cm = dy_px / self.scale
-
-            # Обновляем смещение сетки ТОЧНО на рассчитанное значение
-            self.grid_offset_x += dx_cm
-            self.grid_offset_y += dy_cm
-
-            # Сохраняем новое положение
-            self.last_touch_pos = (touch.x, touch.y)
-
-            # Вызываем callback НЕМЕДЛЕННО для обновления внешнего отображения
-            if hasattr(self, 'on_grid_move') and callable(self.on_grid_move):
-                self.on_grid_move()
-
-            # Перерисовываем немедленно
-            self.draw_layout()
-
-            return True
-
-        return super().on_touch_move(touch)
-
     def zoom_at_center(self, zoom_in=True):
         """Масштабирует относительно центра виджета"""
         # Запоминаем центр виджета в мировых координатах
@@ -489,10 +464,16 @@ class LayoutWidget(Widget):
         if min_y > visible_max_y:
             self.offset_y -= (min_y - visible_max_y) * self.scale
 
+    def get_distance(self, touch1, touch2):
+        return ((touch1.x - touch2.x) ** 2 + (touch1.y - touch2.y) ** 2) ** 0.5
+
+    def get_center(self, touch1, touch2):
+        return ((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2)
+
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
+            # Колесо мыши (оставляем для десктопа)
             if touch.is_mouse_scrolling:
-                # Масштабирование всегда работает
                 if touch.button == 'scrolldown':
                     self.scale = max(0.1, self.scale - 0.05)
                 elif touch.button == 'scrollup':
@@ -500,38 +481,81 @@ class LayoutWidget(Widget):
                 self.draw_layout()
                 return True
 
-            # Обработка двойного тапа для сброса
-            if touch.is_double_tap:
-                self.center_room()
-                self.draw_layout()
+            # Начало пинча
+            self.touches[touch.id] = touch
+            if len(self.touches) == 2:
+                touches = list(self.touches.values())
+                self.pinch_start_distance = self.get_distance(
+                    touches[0], touches[1])
+                self.pinch_start_scale = self.scale
+                self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
 
-            # В режиме панорамирования - начинаем перетаскивание
-            if not self.dragging_enabled:
-                self.panning = True
-                self.last_pan_pos = touch.pos
-                return True
-
-            # В режиме сетки - начинаем перетаскивание сетки
-            elif self.dragging_enabled:
+            # Одиночное касание — перетаскивание или перемещение сетки
+            if self.dragging_enabled:
                 self.dragging = True
                 self.last_touch_pos = touch.pos
+            else:
+                self.panning = True
+                self.last_pan_pos = touch.pos
+            return True
 
-                # НОВОЕ: немедленно обрабатываем смещение при нажатии
-                # Это решит проблему с шагом 5 см
-                if hasattr(self, 'last_touch_time'):
-                    current_time = Clock.get_time()
-                    if current_time - self.last_touch_time < 0.2:  # двойной клик
-                        self.center_room()
-                        self.draw_layout()
-                        return True
-                self.last_touch_time = Clock.get_time()
-
-                return True
-            
         return super().on_touch_down(touch)
 
+    def on_touch_move(self, touch):
+        if touch.id in self.touches and len(self.touches) == 2:
+            # Пинч-масштабирование
+            touches = list(self.touches.values())
+            current_distance = self.get_distance(touches[0], touches[1])
+            if self.pinch_start_distance:
+                scale_factor = current_distance / self.pinch_start_distance
+                new_scale = self.pinch_start_scale * scale_factor
+                new_scale = max(0.1, min(2.0, new_scale))
+                if self.pinch_center:
+                    old_center_x = (
+                        self.pinch_center[0] - self.offset_x) / self.scale
+                    old_center_y = (
+                        self.pinch_center[1] - self.offset_y) / self.scale
+                    self.scale = new_scale
+                    self.offset_x = self.pinch_center[0] - \
+                        old_center_x * self.scale
+                    self.offset_y = self.pinch_center[1] - \
+                        old_center_y * self.scale
+                    self.draw_layout()
+            return True
+
+        # Обработка перетаскивания (один палец)
+        if self.dragging and self.dragging_enabled:
+            dx_px = touch.x - self.last_touch_pos[0]
+            dy_px = touch.y - self.last_touch_pos[1]
+            # --- ИЗМЕНЕНИЕ ---
+            # Округляем смещение до целых сантиметров перед добавлением
+            dx_cm = round(dx_px / self.scale)
+            dy_cm = round(dy_px / self.scale)
+            # ---
+            self.grid_offset_x += dx_cm
+            self.grid_offset_y += dy_cm
+            self.last_touch_pos = touch.pos
+            if self.on_grid_move:
+                self.on_grid_move() # Вызов callback для обновления
+            self.draw_layout()
+            return True
+
+        if self.panning and not self.dragging_enabled:
+            dx = touch.x - self.last_pan_pos[0]
+            dy = touch.y - self.last_pan_pos[1]
+            self.offset_x += dx
+            self.offset_y += dy
+            self.last_pan_pos = touch.pos
+            self.draw_layout()
+            return True
+
+        return super().on_touch_move(touch)
+
     def on_touch_up(self, touch):
+        self.touches.pop(touch.id, None)
+        self.pinch_start_distance = None
+        self.pinch_center = None
         self.dragging = False
         self.panning = False
         self.last_touch_pos = None

@@ -33,6 +33,11 @@ class GridWidget(Widget):
         self.dragging = False
         self.last_touch_pos = None
 
+        self.touches = {}  # Словарь для отслеживания касаний: {touch.id: touch}
+        self.pinch_start_distance = None
+        self.pinch_start_scale = None
+        self.pinch_center = None
+
         # Для обработки клика на линию-доводчик
         self.closing_line_start = None
         self.closing_line_end = None
@@ -359,44 +364,6 @@ class GridWidget(Widget):
         self.canvas.clear()
         self.draw_editor()
 
-    def on_touch_down(self, touch):
-        """Обработка нажатия на сетку"""
-        if self.collide_point(*touch.pos):
-            # Проверяем, если это колесико мыши (scroll)
-            if touch.is_mouse_scrolling:
-                if touch.button == 'scrolldown':
-                    # Уменьшаем масштаб
-                    self.scale = max(0.1, self.scale - 0.05)
-                elif touch.button == 'scrollup':
-                    # Увеличиваем масштаб
-                    self.scale = min(1.0, self.scale + 0.05)
-
-                # Перерисовываем
-                self.canvas.clear()
-                self.draw_editor()
-                return True
-
-            # Проверяем, было ли нажатие на линию-доводчик
-            if len(self.walls) >= 3 and self.closing_line_points:
-                # Координаты линии в пикселях
-                x1, y1, x2, y2 = self.closing_line_points
-
-                # Проверяем расстояние от точки касания до линии
-                distance = self.point_to_line_distance(
-                    touch.x, touch.y, x1, y1, x2, y2)
-
-                # Если расстояние меньше порога (10 пикселей)
-                if distance < 10:
-                    # Создаем стену, замыкающую комнату
-                    self.add_closing_wall()
-                    return True
-
-            # Иначе начинаем перетаскивание
-            self.dragging = True
-            self.last_touch_pos = (touch.x, touch.y)
-            return True
-        return super().on_touch_down(touch)
-
     def add_closing_wall(self):
         """Добавляет стену, замыкающую комнату (при нажатии на линию-доводчик)"""
         if len(self.walls) < 3 or not self.closing_line_start or not self.closing_line_end:
@@ -421,29 +388,98 @@ class GridWidget(Widget):
         self.canvas.clear()
         self.draw_editor()
 
+    def get_distance(self, touch1, touch2):
+        """Расстояние между двумя точками касания"""
+        return ((touch1.x - touch2.x) ** 2 + (touch1.y - touch2.y) ** 2) ** 0.5
+
+    def get_center(self, touch1, touch2):
+        """Центр между двумя точками касания"""
+        return ((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2)
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos):
+            if self.is_touch_on_closing_line(touch):
+                self.add_closing_wall()
+                return True # Обработка завершена            
+        
+            # Колесо мыши (оставляем для десктопа)
+            if touch.is_mouse_scrolling:
+                if touch.button == 'scrolldown':
+                    self.scale = max(0.1, self.scale - 0.05)
+                elif touch.button == 'scrollup':
+                    self.scale = min(3.0, self.scale + 0.05)  # Увеличен макс. масштаб до 3.0
+                self.canvas.clear()
+                self.draw_editor()
+                return True
+
+            # Начало пинч-жеста (2 пальца)
+            self.touches[touch.id] = touch
+            if len(self.touches) == 2:
+                touches = list(self.touches.values())
+                self.pinch_start_distance = self.get_distance(touches[0], touches[1])
+                self.pinch_start_scale = self.scale
+                self.pinch_center = self.get_center(touches[0], touches[1])
+                return True
+
+            # Одиночное касание — панорамирование
+            self.dragging = True
+            self.last_touch_pos = (touch.x, touch.y)
+            return True
+        return super().on_touch_down(touch)
+
+    def is_touch_on_closing_line(self, touch, tolerance=dp(10)):
+        """Проверяет, находится ли касание рядом с линией-доводчиком."""
+        if not self.closing_line_points or len(self.closing_line_points) != 4:
+            return False
+
+        x1, y1, x2, y2 = self.closing_line_points
+        px, py = touch.pos
+
+        # Вычисляем расстояние от точки до линии
+        dist = self.point_to_line_distance(px, py, x1, y1, x2, y2)
+        return dist < tolerance
+
     def on_touch_move(self, touch):
-        """Обработка перемещения пальца/мыши"""
+        if touch.id in self.touches and len(self.touches) == 2:
+            # Пинч-масштабирование
+            touches = list(self.touches.values())
+            current_distance = self.get_distance(touches[0], touches[1])
+            
+            if self.pinch_start_distance:
+                scale_factor = current_distance / self.pinch_start_distance
+                new_scale = self.pinch_start_scale * scale_factor
+                new_scale = max(0.1, min(3.0, new_scale))  # Ограничение масштаба
+                
+                # Пересчитываем смещение относительно центра жеста
+                if self.pinch_center:
+                    old_center_x = (self.pinch_center[0] - self.offset_x) / self.scale
+                    old_center_y = (self.pinch_center[1] - self.offset_y) / self.scale
+                    
+                    self.scale = new_scale
+                    self.offset_x = self.pinch_center[0] - old_center_x * self.scale
+                    self.offset_y = self.pinch_center[1] - old_center_y * self.scale
+                
+                self.canvas.clear()
+                self.draw_editor()
+                return True
+        
+        # Обработка панорамирования (один палец)
         if self.dragging and self.last_touch_pos:
-            # Вычисляем смещение
             dx = touch.x - self.last_touch_pos[0]
             dy = touch.y - self.last_touch_pos[1]
-
-            # Обновляем смещение
             self.offset_x += dx
             self.offset_y += dy
-
-            # Сохраняем новую позицию
             self.last_touch_pos = (touch.x, touch.y)
-
-            # Перерисовываем
             self.canvas.clear()
             self.draw_editor()
-
             return True
+        
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
-        """Обработка отпускания"""
+        self.touches.pop(touch.id, None)
+        self.pinch_start_distance = None
+        self.pinch_center = None
         self.dragging = False
         self.last_touch_pos = None
         return super().on_touch_up(touch)

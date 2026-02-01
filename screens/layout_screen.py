@@ -8,10 +8,12 @@ from kivy.metrics import dp
 from kivy.uix.floatlayout import FloatLayout
 from widgets.layout_widget import LayoutWidget
 from models import CeilingLayout
-from database import save_project # Импортируем функцию сохранения
+from database import save_project  # Импортируем функцию сохранения
+
 
 class LayoutScreen(Screen):
     """Экран раскладки потолка 60×60 см"""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.snap_mode = 0
@@ -39,6 +41,25 @@ class LayoutScreen(Screen):
 
         self.add_widget(main_layout)
 
+    def toggle_dimensions(self, instance):
+        """Переключает отображение размеров резаных плиток"""
+        if not hasattr(self, 'layout_widget'):
+            return
+
+        # Инвертируем состояние
+        self.layout_widget.show_dimensions = not self.layout_widget.show_dimensions
+
+        # Меняем текст кнопки с переносом
+        if self.layout_widget.show_dimensions:
+            instance.text = 'Скрыть nразмеры'
+            instance.background_color = (0.5, 0.5, 0.5, 1)
+        else:
+            instance.text = 'Показать nразмеры'
+            instance.background_color = (0.3, 0.7, 0.3, 1)
+
+        # Перерисовываем
+        self.layout_widget.draw_layout()
+
     def on_pre_enter(self):
         """Загружаем комнату при входе"""
         from kivy.clock import Clock
@@ -49,7 +70,6 @@ class LayoutScreen(Screen):
         if not hasattr(self.manager, 'current_room') or not self.manager.current_room:
             print("Ошибка: current_room не установлен")
             return
-
         current_room = self.manager.current_room
         if current_room:
             print(f"Загрузка комнаты: {current_room.name}")
@@ -60,29 +80,19 @@ class LayoutScreen(Screen):
 
             # Устанавливаем стены в виджет
             self.layout_widget.set_room(current_room.walls)
-
             # Создаем расчет раскладки
             self.ceiling_layout = CeilingLayout(current_room)
-
             # ВАЖНО: Устанавливаем начальное смещение сетки в 0, а не берем из виджета
             self.ceiling_layout.grid_offset_x = 0
             self.ceiling_layout.grid_offset_y = 0
-
             # Рассчитываем раскладку
             self.ceiling_layout.calculate_layout()
-
             # Передаем layout в виджет
             self.layout_widget.layout = self.ceiling_layout
-
             # Устанавливаем callback для обновления статистики при движении сетки
             self.layout_widget.on_grid_move = self.on_grid_moved
-
             # Обновляем статистику
             self.update_stats()
-
-            # Обновляем отображение смещения
-            self.update_offset_label()
-
             # Явно перерисовываем
             self.layout_widget.draw_layout()
 
@@ -90,22 +100,25 @@ class LayoutScreen(Screen):
         """Callback, вызываемый при изменении положения сетки"""
         # Получаем ТОЧНЫЕ значения смещения без округления
         if hasattr(self.layout_widget, 'grid_offset_x') and hasattr(self.layout_widget, 'grid_offset_y'):
-            # Берем точные значения и округляем только для отображения
-            offset_x = round(self.layout_widget.grid_offset_x,
-                             1)  # Округляем до 0.1 см
-            offset_y = round(self.layout_widget.grid_offset_y, 1)
+            # Берем точные значения для расчета
+            exact_offset_x = self.layout_widget.grid_offset_x
+            exact_offset_y = self.layout_widget.grid_offset_y
+
+            # Обновляем расчет раскладки с точными значениями
+            if hasattr(self, 'ceiling_layout'):
+                self.ceiling_layout.grid_offset_x = exact_offset_x
+                self.ceiling_layout.grid_offset_y = exact_offset_y
+                self.ceiling_layout.calculate_layout()
+                self.layout_widget.layout = self.ceiling_layout
+                self.update_stats()  # Обновляем статистику при движении сетки
+
+            # Округляем ТОЛЬКО для отображения в лейбле ПОСЛЕ расчета
+            offset_x_display = int(round(exact_offset_x))
+            offset_y_display = int(round(exact_offset_y))
 
             # Обновляем отображение СРАЗУ при любом изменении
             if hasattr(self, 'offset_label'):
-                self.offset_label.text = f'Смещение: {int(round(offset_x))}×{int(round(offset_y))} см'
-
-            # Обновляем расчет раскладки
-            if hasattr(self, 'ceiling_layout'):
-                self.ceiling_layout.grid_offset_x = offset_x
-                self.ceiling_layout.grid_offset_y = offset_y
-                self.ceiling_layout.calculate_layout()
-                self.layout_widget.layout = self.ceiling_layout
-                self.update_stats() # Обновляем статистику при движении сетки
+                self.offset_label.text = f'Смещение: {offset_x_display}×{offset_y_display} см'
 
     def create_toolbar(self):
         """Создает панель инструментов с кнопкой режима"""
@@ -127,7 +140,7 @@ class LayoutScreen(Screen):
         # Заголовок
         title = Label(
             text='Раскладка\n60×60 см',
-            font_size=dp(16),
+            font_size=dp(14),
             size_hint=(0.3, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -194,14 +207,21 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
                 self.update_stats()
-                self.update_offset_label()
                 self.layout_widget.draw_layout()
 
     def create_control_panel(self):
-        """Создает панель управления сеткой"""
+        """Создает панель управления сеткой с одной строкой кнопок и строкой кнопки переключения размеров"""
+        # Основной контейнер с вертикальной ориентацией (2 строки)
         control_panel = BoxLayout(
-            size_hint=(1, 0.05),
+            orientation='vertical',
+            size_hint=(1, 0.1),  # Увеличена высота до 10% экрана
             padding=dp(5),
+            spacing=dp(5)
+        )
+
+        # === СТРОКА 1: кнопки смещения ===
+        row1 = BoxLayout(
+            size_hint=(1, 0.5),
             spacing=dp(5)
         )
 
@@ -209,42 +229,64 @@ class LayoutScreen(Screen):
         btn_left = Button(
             text='<-',
             font_size=dp(20),
-            size_hint=(0.15, 1)
+            size_hint=(0.2, 1),
+            background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_left.bind(on_press=lambda x: self.move_grid(-1, 0))
         btn_up = Button(
             text='^',
             font_size=dp(20),
-            size_hint=(0.15, 1)
+            size_hint=(0.2, 1),
+            background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_up.bind(on_press=lambda x: self.move_grid(0, 1))
         btn_down = Button(
             text='v',
             font_size=dp(20),
-            size_hint=(0.15, 1)
+            size_hint=(0.2, 1),
+            background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_down.bind(on_press=lambda x: self.move_grid(0, -1))
         btn_right = Button(
             text='->',
             font_size=dp(20),
-            size_hint=(0.15, 1)
+            size_hint=(0.2, 1),
+            background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_right.bind(on_press=lambda x: self.move_grid(1, 0))
 
-        # Индикатор смещения
-        self.offset_label = Label(
-            text='Смещение: 0×0 см',
-            font_size=dp(14),
-            size_hint=(0.4, 1),
-            color=(0, 0, 0, 1)
+        row1.add_widget(btn_left)
+        row1.add_widget(btn_up)
+        row1.add_widget(btn_down)
+        row1.add_widget(btn_right)
+
+        # === СТРОКА 2: кнопка переключения размеров ===
+        row2 = BoxLayout(
+            size_hint=(1, 0.5),
+            padding=(dp(10), 0)
         )
 
-        control_panel.add_widget(btn_left)
-        control_panel.add_widget(btn_up)
-        control_panel.add_widget(btn_down)
-        control_panel.add_widget(btn_right)
-        control_panel.add_widget(self.offset_label)
+        # Кнопка с переносом текста и увеличенной высотой
+        self.toggle_dims_btn = Button(
+            text='Скрыть размеры',  # Перенос через \
+            font_size=dp(14),
+            size_hint=(0.4, 1),
+            background_color=(0.5, 0.5, 0.5, 1),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle'
+        )
+        # Настройка переноса текста
+        self.toggle_dims_btn.bind(
+            size=lambda instance, size: setattr(
+                instance, 'text_size', (size[0] * 0.9, None))
+        )
+        self.toggle_dims_btn.bind(on_press=self.toggle_dimensions)
+        row2.add_widget(self.toggle_dims_btn)
 
+        # Собираем обе строки в панель
+        control_panel.add_widget(row1)
+        control_panel.add_widget(row2)
         return control_panel
 
     def create_stats_panel(self):
@@ -265,9 +307,11 @@ class LayoutScreen(Screen):
     def move_grid(self, dx, dy):
         """Смещает сетку на dx, dy сантиметров с немедленным отображением"""
         if hasattr(self.layout_widget, 'grid_offset_x'):
-            # Устанавливаем ТОЧНОЕ смещение
-            self.layout_widget.grid_offset_x += dx
-            self.layout_widget.grid_offset_y += dy
+            # Устанавливаем ТОЧНОЕ смещение и округляем до целого
+            self.layout_widget.grid_offset_x = round(
+                self.layout_widget.grid_offset_x + dx)
+            self.layout_widget.grid_offset_y = round(
+                self.layout_widget.grid_offset_y + dy)
 
             # Немедленно обновляем расчет
             if hasattr(self, 'ceiling_layout'):
@@ -275,18 +319,10 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.grid_offset_y = self.layout_widget.grid_offset_y
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
-
             # КРИТИЧЕСКИ ВАЖНО: вызываем callback вручную для немедленного обновления
             self.on_grid_moved()
-
             # Перерисовываем
             self.layout_widget.draw_layout()
-
-    def update_offset_label(self):
-        """Обновляет отображение смещения сетки"""
-        ox = self.layout_widget.grid_offset_x
-        oy = self.layout_widget.grid_offset_y
-        self.offset_label.text = f'Смещение: {int(ox)}×{int(oy)} см'
 
     def reset_grid(self, instance):
         """Сбрасывает смещение сетки к (0, 0)"""
@@ -297,9 +333,8 @@ class LayoutScreen(Screen):
             self.ceiling_layout.grid_offset_y = 0
             self.ceiling_layout.calculate_layout()
             self.layout_widget.layout = self.ceiling_layout
-            self.update_stats()
-            self.update_offset_label()
-            self.layout_widget.draw_layout()
+        self.update_stats()
+        self.layout_widget.draw_layout()
 
     def update_stats(self):
         """Обновляет статистику раскладки"""
