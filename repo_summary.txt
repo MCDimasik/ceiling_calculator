@@ -34,106 +34,208 @@ ceiling_calculator/
 
 
 ============================================================
-ФАЙЛ: .github\workflows\build-apk.yml
-============================================================
-
-name: Build Simple Kivy APK
-
-on: workflow_dispatch
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Python 3.8
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.8'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git openjdk-11-jdk python3-dev zlib1g-dev
-    
-    - name: Install Buildozer
-      run: |
-        pip install buildozer==1.4.0
-        pip install cython==0.29.21
-    
-    - name: Create minimal spec
-      run: |
-        if [ ! -f buildozer.spec ]; then
-          echo "[app]" > buildozer.spec
-          echo "title = MyApp" >> buildozer.spec
-          echo "package.name = myapp" >> buildozer.spec
-          echo "package.domain = org.test" >> buildozer.spec
-          echo "source.dir = ." >> buildozer.spec
-          echo "source.include_exts = py,png,jpg,kv" >> buildozer.spec
-          echo "version = 1.0" >> buildozer.spec
-          echo "requirements = python3,kivy==2.0.0" >> buildozer.spec
-          echo "orientation = portrait" >> buildozer.spec
-          echo "android.permissions = INTERNET" >> buildozer.spec
-          echo "android.archs = arm64-v8a" >> buildozer.spec
-          echo "android.api = 30" >> buildozer.spec
-          echo "android.minapi = 21" >> buildozer.spec
-          echo "android.sdk = 30" >> buildozer.spec
-          echo "android.ndk = 21.3.6528147" >> buildozer.spec
-          echo "debug = 1" >> buildozer.spec
-          echo "" >> buildozer.spec
-          echo "[buildozer]" >> buildozer.spec
-          echo "log_level = 2" >> buildozer.spec
-        fi
-    
-    - name: Accept licenses
-      run: |
-        mkdir -p ~/.android/licenses
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/licenses/android-sdk-license
-    
-    - name: Build APK
-      run: |
-        echo "y" | buildozer android debug
-        
-        mkdir -p artifacts
-        cp bin/*.apk artifacts/app.apk 2>/dev/null || true
-    
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-apk
-        path: artifacts/*.apk
-
-============================================================
 ФАЙЛ: .gitignore
 ============================================================
 
 
-
 ============================================================
-ФАЙЛ: buildozer.spec
+ФАЙЛ: database.py
 ============================================================
 
-[app]
-title = krutoi Calculator
-package.name = ceiling_calculator
-package.domain = org.test
+# database.py
+import sqlite3
+import json
+from datetime import datetime
+from models import Project, Room  # Предполагается, что модели определены так же
 
-source.dir = .
-source.include_exts = py,png,jpg,kv,ttf,db
+DB_NAME = "ceiling_calculator.db"
 
-version = 0.1
 
-requirements = python3,kivy,kivymd,pillow
+def init_db():
+    """Инициализирует базу данных и создает таблицы."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
 
-orientation = portrait
+    # Таблица для проектов
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
 
-android.api = 33
-android.minapi = 24
-android.archs = arm64-v8a
+    # Таблица для комнат
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            walls_json TEXT NOT NULL, -- Хранение стен как JSON
+            last_position_json TEXT,  -- Опционально: последняя позиция в редакторе
+            FOREIGN KEY (project_id) REFERENCES projects (id)
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-fullscreen = 1
+
+def save_project(project):
+    """Сохраняет проект (и его комнаты) в базу данных."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    try:
+        # Вставка или обновление проекта
+        if project.id is None:
+            cursor.execute("""
+                INSERT INTO projects (name, created_at) VALUES (?, ?)
+            """, (project.name, project.created_at.isoformat()))
+            project.id = cursor.lastrowid
+        else:
+            cursor.execute("""
+                UPDATE projects SET name = ?, created_at = ?
+                WHERE id = ?
+            """, (project.name, project.created_at.isoformat(), project.id))
+
+        # Удаление существующих комнат проекта перед обновлением (для простоты)
+        cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project.id,))
+
+        # Вставка комнат
+        for room in project.rooms:
+            walls_json_str = json.dumps(room.walls)
+            last_pos_json_str = json.dumps(room.last_position) if hasattr(
+                room, 'last_position') else None
+            cursor.execute("""
+                INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json)
+                VALUES (?, ?, ?, ?, ?)
+            """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str))
+
+        conn.commit()
+        print(f"Проект '{project.name}' успешно сохранен в базу данных.")
+    except sqlite3.Error as e:
+        print(f"Ошибка при сохранении проекта в базу данных: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def load_project(project_id):
+    """Загружает проект (и его комнаты) из базы данных по ID."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    try:
+        # Загрузка проекта
+        cursor.execute(
+            "SELECT id, name, created_at FROM projects WHERE id = ?", (project_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        project = Project(row[1])  # name
+        project.id = row[0]       # id
+        project.created_at = datetime.fromisoformat(row[2])  # created_at
+
+        # Загрузка комнат проекта
+        cursor.execute(
+            "SELECT id, name, created_at, walls_json, last_position_json FROM rooms WHERE project_id = ?", (project_id,))
+        for room_row in cursor.fetchall():
+            room = Room(room_row[1])  # name
+            room.id = room_row[0]    # id
+            room.created_at = datetime.fromisoformat(room_row[2])  # created_at
+            room.walls = json.loads(room_row[3])  # walls_json
+            if room_row[4]:  # last_position_json
+                room.last_position = json.loads(room_row[4])
+
+            project.rooms.append(room)
+
+        print(f"Проект '{project.name}' успешно загружен из базы данных.")
+        return project
+
+    except sqlite3.Error as e:
+        print(f"Ошибка при загрузке проекта из базы данных: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def load_all_projects():
+    """Загружает список всех проектов (без комнат)."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "SELECT id, name, created_at FROM projects ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        projects = []
+        for row in rows:
+            proj = Project(row[1])  # name
+            proj.id = row[0]       # id
+            proj.created_at = datetime.fromisoformat(row[2])  # created_at
+            projects.append(proj)
+        return projects
+    except sqlite3.Error as e:
+        print(f"Ошибка при загрузке списка проектов: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def update_room(room):
+    """Обновляет конкретную комнату в базе данных."""
+    # Предполагается, что у комнаты уже есть project_id
+    # Нужно найти project_id, к которому принадлежит комната
+    # Это может быть сложно, если у нас есть только объект Room
+    # Лучше передавать project_id явно или обновлять через проект
+    # Реализация зависит от того, как ты будешь использовать эту функцию
+    # В текущем контексте, возможно, проще сохранять весь проект целиком
+    pass  # Пока не используется напрямую, save_project обновляет комнаты
+
+# --- Добавим функции для удаления ---
+
+
+def delete_project(project_id):
+    """Удаляет проект и все его комнаты из базы данных."""
+    conn = sqlite3.connect('ceiling_calculator.db')
+    cursor = conn.cursor()
+    try:
+        # Удаляем комнаты проекта (каскадное удаление через внешний ключ)
+        cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project_id,))
+        # Удаляем сам проект
+        cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+        print(f"Проект с ID {project_id} и его комнаты успешно удалены.")
+        return True
+    except sqlite3.Error as e:
+        print(f"Ошибка при удалении проекта: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def delete_room_from_project(project_id, room_id):
+    """Удаляет комнату из базы данных, связанной с проектом."""
+    conn = sqlite3.connect('ceiling_calculator.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM rooms WHERE id = ? AND project_id = ?", (room_id, project_id))
+        conn.commit()
+        if cursor.rowcount > 0:
+            print(f"Комната с ID {room_id} из проекта с ID {project_id} успешно удалена.")
+            return True
+        else:
+            print(f"Комната с ID {room_id} не найдена в проекте с ID {project_id}.")
+            return False
+    except sqlite3.Error as e:
+        print(f"Ошибка при удалении комнаты: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 ============================================================
 ФАЙЛ: main.py
@@ -720,10 +822,12 @@ from kivy.metrics import dp
 from kivy.uix.floatlayout import FloatLayout
 from widgets.layout_widget import LayoutWidget
 from models import CeilingLayout
-from database import save_project # Импортируем функцию сохранения
+from database import save_project  # Импортируем функцию сохранения
+
 
 class LayoutScreen(Screen):
     """Экран раскладки потолка 60×60 см"""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.snap_mode = 0
@@ -755,10 +859,10 @@ class LayoutScreen(Screen):
         """Переключает отображение размеров резаных плиток"""
         if not hasattr(self, 'layout_widget'):
             return
-        
+
         # Инвертируем состояние
         self.layout_widget.show_dimensions = not self.layout_widget.show_dimensions
-        
+
         # Меняем текст кнопки с переносом
         if self.layout_widget.show_dimensions:
             instance.text = 'Скрыть nразмеры'
@@ -766,7 +870,7 @@ class LayoutScreen(Screen):
         else:
             instance.text = 'Показать nразмеры'
             instance.background_color = (0.3, 0.7, 0.3, 1)
-        
+
         # Перерисовываем
         self.layout_widget.draw_layout()
 
@@ -780,7 +884,6 @@ class LayoutScreen(Screen):
         if not hasattr(self.manager, 'current_room') or not self.manager.current_room:
             print("Ошибка: current_room не установлен")
             return
-
         current_room = self.manager.current_room
         if current_room:
             print(f"Загрузка комнаты: {current_room.name}")
@@ -791,29 +894,19 @@ class LayoutScreen(Screen):
 
             # Устанавливаем стены в виджет
             self.layout_widget.set_room(current_room.walls)
-
             # Создаем расчет раскладки
             self.ceiling_layout = CeilingLayout(current_room)
-
             # ВАЖНО: Устанавливаем начальное смещение сетки в 0, а не берем из виджета
             self.ceiling_layout.grid_offset_x = 0
             self.ceiling_layout.grid_offset_y = 0
-
             # Рассчитываем раскладку
             self.ceiling_layout.calculate_layout()
-
             # Передаем layout в виджет
             self.layout_widget.layout = self.ceiling_layout
-
             # Устанавливаем callback для обновления статистики при движении сетки
             self.layout_widget.on_grid_move = self.on_grid_moved
-
             # Обновляем статистику
             self.update_stats()
-
-            # Обновляем отображение смещения
-            self.update_offset_label()
-
             # Явно перерисовываем
             self.layout_widget.draw_layout()
 
@@ -821,22 +914,25 @@ class LayoutScreen(Screen):
         """Callback, вызываемый при изменении положения сетки"""
         # Получаем ТОЧНЫЕ значения смещения без округления
         if hasattr(self.layout_widget, 'grid_offset_x') and hasattr(self.layout_widget, 'grid_offset_y'):
-            # Берем точные значения и округляем только для отображения
-            offset_x = round(self.layout_widget.grid_offset_x,
-                             1)  # Округляем до 0.1 см
-            offset_y = round(self.layout_widget.grid_offset_y, 1)
+            # Берем точные значения для расчета
+            exact_offset_x = self.layout_widget.grid_offset_x
+            exact_offset_y = self.layout_widget.grid_offset_y
+
+            # Обновляем расчет раскладки с точными значениями
+            if hasattr(self, 'ceiling_layout'):
+                self.ceiling_layout.grid_offset_x = exact_offset_x
+                self.ceiling_layout.grid_offset_y = exact_offset_y
+                self.ceiling_layout.calculate_layout()
+                self.layout_widget.layout = self.ceiling_layout
+                self.update_stats()  # Обновляем статистику при движении сетки
+
+            # Округляем ТОЛЬКО для отображения в лейбле ПОСЛЕ расчета
+            offset_x_display = int(round(exact_offset_x))
+            offset_y_display = int(round(exact_offset_y))
 
             # Обновляем отображение СРАЗУ при любом изменении
             if hasattr(self, 'offset_label'):
-                self.offset_label.text = f'Смещение: {int(round(offset_x))}×{int(round(offset_y))} см'
-
-            # Обновляем расчет раскладки
-            if hasattr(self, 'ceiling_layout'):
-                self.ceiling_layout.grid_offset_x = offset_x
-                self.ceiling_layout.grid_offset_y = offset_y
-                self.ceiling_layout.calculate_layout()
-                self.layout_widget.layout = self.ceiling_layout
-                self.update_stats() # Обновляем статистику при движении сетки
+                self.offset_label.text = f'Смещение: {offset_x_display}×{offset_y_display} см'
 
     def create_toolbar(self):
         """Создает панель инструментов с кнопкой режима"""
@@ -925,11 +1021,10 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
                 self.update_stats()
-                self.update_offset_label()
                 self.layout_widget.draw_layout()
 
     def create_control_panel(self):
-        """Создает панель управления сеткой с двумя строками"""
+        """Создает панель управления сеткой с одной строкой кнопок и строкой кнопки переключения размеров"""
         # Основной контейнер с вертикальной ориентацией (2 строки)
         control_panel = BoxLayout(
             orientation='vertical',
@@ -937,13 +1032,13 @@ class LayoutScreen(Screen):
             padding=dp(5),
             spacing=dp(5)
         )
-        
-        # === СТРОКА 1: кнопки смещения + индикатор ===
+
+        # === СТРОКА 1: кнопки смещения ===
         row1 = BoxLayout(
             size_hint=(1, 0.5),
             spacing=dp(5)
         )
-        
+
         # Кнопки смещения сетки с шагом 1 см
         btn_left = Button(
             text='<-',
@@ -952,7 +1047,6 @@ class LayoutScreen(Screen):
             background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_left.bind(on_press=lambda x: self.move_grid(-1, 0))
-        
         btn_up = Button(
             text='^',
             font_size=dp(20),
@@ -960,7 +1054,6 @@ class LayoutScreen(Screen):
             background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_up.bind(on_press=lambda x: self.move_grid(0, 1))
-        
         btn_down = Button(
             text='v',
             font_size=dp(20),
@@ -968,7 +1061,6 @@ class LayoutScreen(Screen):
             background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_down.bind(on_press=lambda x: self.move_grid(0, -1))
-        
         btn_right = Button(
             text='->',
             font_size=dp(20),
@@ -976,44 +1068,21 @@ class LayoutScreen(Screen):
             background_color=(0.3, 0.3, 0.3, 1)
         )
         btn_right.bind(on_press=lambda x: self.move_grid(1, 0))
-        
-        # Индикатор смещения (две строки: заголовок + значение)
-        offset_container = BoxLayout(
-            orientation='vertical',
-            size_hint=(0.2, 1),
-            padding=(dp(5), 0)
-        )
-        offset_label1 = Label(
-            text='Смещение',
-            font_size=dp(10),
-            size_hint=(1, 0.4),
-            color=(0.7, 0.7, 0.7, 1)
-        )
-        self.offset_label = Label(
-            text='0×0 см',
-            font_size=dp(16),
-            size_hint=(1, 0.6),
-            color=(1, 1, 1, 1),
-            bold=True
-        )
-        offset_container.add_widget(offset_label1)
-        offset_container.add_widget(self.offset_label)
-        
+
         row1.add_widget(btn_left)
         row1.add_widget(btn_up)
         row1.add_widget(btn_down)
         row1.add_widget(btn_right)
-        row1.add_widget(offset_container)
-        
+
         # === СТРОКА 2: кнопка переключения размеров ===
         row2 = BoxLayout(
             size_hint=(1, 0.5),
             padding=(dp(10), 0)
         )
-        
+
         # Кнопка с переносом текста и увеличенной высотой
         self.toggle_dims_btn = Button(
-            text='Скрыть\\nразмеры',  # Перенос через \\n
+            text='Скрыть размеры',  # Перенос через \
             font_size=dp(14),
             size_hint=(0.4, 1),
             background_color=(0.5, 0.5, 0.5, 1),
@@ -1023,16 +1092,15 @@ class LayoutScreen(Screen):
         )
         # Настройка переноса текста
         self.toggle_dims_btn.bind(
-            size=lambda instance, size: setattr(instance, 'text_size', (size[0] * 0.9, None))
+            size=lambda instance, size: setattr(
+                instance, 'text_size', (size[0] * 0.9, None))
         )
         self.toggle_dims_btn.bind(on_press=self.toggle_dimensions)
-        
         row2.add_widget(self.toggle_dims_btn)
-        
+
         # Собираем обе строки в панель
         control_panel.add_widget(row1)
         control_panel.add_widget(row2)
-        
         return control_panel
 
     def create_stats_panel(self):
@@ -1053,9 +1121,11 @@ class LayoutScreen(Screen):
     def move_grid(self, dx, dy):
         """Смещает сетку на dx, dy сантиметров с немедленным отображением"""
         if hasattr(self.layout_widget, 'grid_offset_x'):
-            # Устанавливаем ТОЧНОЕ смещение
-            self.layout_widget.grid_offset_x += dx
-            self.layout_widget.grid_offset_y += dy
+            # Устанавливаем ТОЧНОЕ смещение и округляем до целого
+            self.layout_widget.grid_offset_x = round(
+                self.layout_widget.grid_offset_x + dx)
+            self.layout_widget.grid_offset_y = round(
+                self.layout_widget.grid_offset_y + dy)
 
             # Немедленно обновляем расчет
             if hasattr(self, 'ceiling_layout'):
@@ -1063,18 +1133,10 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.grid_offset_y = self.layout_widget.grid_offset_y
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
-
             # КРИТИЧЕСКИ ВАЖНО: вызываем callback вручную для немедленного обновления
             self.on_grid_moved()
-
             # Перерисовываем
             self.layout_widget.draw_layout()
-
-    def update_offset_label(self):
-        """Обновляет отображение смещения сетки"""
-        ox = self.layout_widget.grid_offset_x
-        oy = self.layout_widget.grid_offset_y
-        self.offset_label.text = f'Смещение: {int(ox)}×{int(oy)} см'
 
     def reset_grid(self, instance):
         """Сбрасывает смещение сетки к (0, 0)"""
@@ -1085,9 +1147,8 @@ class LayoutScreen(Screen):
             self.ceiling_layout.grid_offset_y = 0
             self.ceiling_layout.calculate_layout()
             self.layout_widget.layout = self.ceiling_layout
-            self.update_stats()
-            self.update_offset_label()
-            self.layout_widget.draw_layout()
+        self.update_stats()
+        self.layout_widget.draw_layout()
 
     def update_stats(self):
         """Обновляет статистику раскладки"""
@@ -1496,6 +1557,353 @@ class ProjectsScreen(Screen):
     def go_back(self, instance):
         """Возврат на главный экран"""
         self.manager.current = 'main'
+
+============================================================
+ФАЙЛ: screens\rooms_screen.py
+============================================================
+
+# screens/rooms_screen.py
+from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
+from kivy.metrics import dp
+from kivy.graphics import Color, Rectangle, Line
+from kivy.clock import Clock
+# Импортируем delete_room_from_project и load_project
+from database import save_project, delete_room_from_project, load_project
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.relativelayout import RelativeLayout
+
+
+class RoomsScreen(Screen):
+    """Экран со списком комнат в проекте"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.title_label = None
+
+        main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
+
+        # Панель инструментов
+        toolbar = self.create_toolbar()
+
+        # Основная область с комнатами
+        content_area = self.create_content_area()
+
+        main_layout.add_widget(toolbar)
+        main_layout.add_widget(content_area)
+        self.add_widget(main_layout)
+        self.bind(size=self.on_size)
+
+    def on_size(self, *args):
+        """Обновляет размеры плиток при изменении размера окна"""
+        if hasattr(self, 'rooms_container') and len(self.rooms_container.children) > 0:
+            # Пересчитываем размеры плиток при изменении размера окна
+            Clock.schedule_once(lambda dt: self.update_rooms_grid(), 0.1)
+
+    def on_pre_enter(self):
+        """Вызывается перед входом на экран - перезагружаем проект и обновляем сетку."""
+        if hasattr(self.manager, 'current_project') and self.manager.current_project:
+            project_id = self.manager.current_project.id
+            if project_id:
+                loaded_project = load_project(project_id)
+                if loaded_project:
+                    self.manager.current_project = loaded_project
+        # Убираем отложенное обновление здесь, так как оно может создавать гонку состояний
+        self.update_rooms_grid()  # <-- Вызываем напрямую, а не через Clock
+
+    def create_toolbar(self):
+        """Создает панель инструментов"""
+        toolbar = BoxLayout(
+            size_hint=(1, 0.15),
+            padding=dp(10),
+            spacing=dp(10)
+        )
+
+        # Кнопка "Назад" к проектам
+        btn_back = Button(
+            text='← Назад',
+            font_size=dp(16),
+            size_hint=(0.3, 1),
+            background_color=(0.8, 0.8, 0.8, 1)
+        )
+        btn_back.bind(on_press=self.go_back)
+
+        # Заголовок (будет обновляться)
+        self.title_label = Label(
+            text='Комнаты',
+            font_size=dp(18),
+            size_hint=(0.4, 1),
+            color=(0, 0, 0, 1),
+            halign='center',
+            valign='middle'
+        )
+        self.title_label.bind(size=self.title_label.setter('text_size'))
+
+        # Кнопка "Добавить комнату" с переносом текста
+        btn_add = Button(
+            text='+ Новая\nкомната',  # Перенос на новую строку
+            font_size=dp(14),
+            size_hint=(0.3, 1),
+            background_color=(0.2, 0.6, 1, 1),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle'
+        )
+        btn_add.bind(on_press=self.show_add_room_dialog)
+
+        # Настраиваем перенос текста для кнопки
+        def update_btn_text(instance, size):
+            instance.text_size = (size[0] - dp(10), None)
+        btn_add.bind(size=update_btn_text)
+
+        toolbar.add_widget(btn_back)
+        toolbar.add_widget(self.title_label)
+        toolbar.add_widget(btn_add)
+
+        return toolbar
+
+    def create_content_area(self):
+        """Создает область с плитками комнат"""
+        # Контейнер для сетки комнат
+        self.rooms_container = GridLayout(
+            cols=2,
+            spacing=dp(10),
+            padding=dp(10),
+            size_hint_y=None
+        )
+        self.rooms_container.bind(
+            minimum_height=self.rooms_container.setter('height'))
+
+        # Скролл для контейнера
+        scroll = ScrollView()
+        scroll.add_widget(self.rooms_container)
+
+        return scroll
+
+    def update_rooms_grid(self):
+        """Обновляет сетку комнат"""
+        self.rooms_container.clear_widgets()
+        project = self.manager.current_project
+        
+        if project:
+            self.title_label.text = f'Комнаты:\n{project.name}'
+            self.title_label.font_size = dp(16)
+            self.title_label.halign = 'center'
+            self.title_label.valign = 'middle'
+            self.title_label.max_lines = 2
+            
+            # Устанавливаем параметры сетки
+            self.rooms_container.cols = 2
+            self.rooms_container.spacing = dp(10)
+            self.rooms_container.padding = dp(10)
+            
+            # Добавляем плитки комнат
+            for room in project.rooms:
+                room_tile = self.create_room_tile(room)
+                self.rooms_container.add_widget(room_tile)
+            
+            # Автоматически устанавливаем высоту контейнера на основе содержимого
+            self.rooms_container.height = self.rooms_container.minimum_height
+        
+        # Если комнат нет
+        if not project or not project.rooms:
+            empty_label = Label(
+                text='Нет комнат\nНажмите "+ Новая комната"',
+                font_size=dp(16),
+                color=(0.5, 0.5, 0.5, 1),
+                halign='center',
+                valign='middle',
+                size_hint_y=None
+            )
+            empty_label.bind(size=empty_label.setter('text_size'))
+            empty_label.height = self.height * 0.3
+            self.rooms_container.add_widget(empty_label)
+            self.rooms_container.height = self.rooms_container.minimum_height
+
+    def create_room_tile(self, room):
+        """Создает плитку для комнаты с кнопкой удаления"""
+        # Вычисляем ширину плитки
+        container_width = self.rooms_container.width if self.rooms_container.width > 0 else self.width
+        tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
+        
+        # Используем RelativeLayout для точного позиционирования
+        tile_layout = RelativeLayout(
+            size_hint=(None, None),
+            size=(tile_width, tile_width)
+        )
+        
+        # Основная плитка - кнопка с фоном
+        tile_button = Button(
+            background_color=(0.95, 0.95, 0.95, 1),
+            background_normal='',
+            text=room.name,
+            font_size=dp(16),
+            color=(0, 0, 0, 1),
+            halign='center',
+            valign='middle',
+            text_size=(tile_width - dp(20), None),
+            shorten=True,
+            max_lines=2
+        )
+        tile_button.bind(size=tile_button.setter('text_size'))
+        tile_button.bind(on_press=lambda instance, r=room: self.open_room_editor(r))
+        
+        # Контейнер для кнопки удаления (точно в правом верхнем углу)
+        delete_container = BoxLayout(
+            size_hint=(None, None),
+            size=(dp(25), dp(25)),
+            pos_hint={'right': 1, 'top': 1}
+        )
+        
+        delete_button = Button(
+            text='X',
+            font_size=dp(12),
+            size_hint=(1, 1),
+            background_color=(0.8, 0.2, 0.2, 1),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle'
+        )
+        delete_button.bind(on_press=lambda instance, r_id=room.id: self.confirm_delete_room(r_id))
+        
+        delete_container.add_widget(delete_button)
+        
+        tile_layout.add_widget(tile_button)
+        tile_layout.add_widget(delete_container)
+        
+        return tile_layout
+
+    def confirm_delete_room(self, room_id):
+        """Показывает диалог подтверждения удаления комнаты."""
+        content = BoxLayout(orientation='vertical',
+                            spacing=dp(10), padding=dp(10))
+        message = Label(text='Вы точно хотите удалить?', font_size=dp(16))
+
+        btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.3))
+
+        def do_delete(dt):
+            # Найдем комнату в списке объектов и удалим её
+            room_to_remove = None
+            for r in self.manager.current_project.rooms:
+                if r.id == room_id:
+                    room_to_remove = r
+                    break
+            if room_to_remove:
+                self.manager.current_project.rooms.remove(room_to_remove)
+                # Сохраняем проект (это удалит комнату из БД)
+                save_project(self.manager.current_project)
+                
+                # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД для актуализации данных
+                if self.manager.current_project.id:
+                    updated_project = load_project(self.manager.current_project.id)
+                    if updated_project:
+                        self.manager.current_project = updated_project
+                
+                print(f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
+                # Обновляем сетку
+                self.update_rooms_grid()
+                popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
+            else:
+                print(f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
+                popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
+
+        def cancel_delete(dt):
+            popup.dismiss()
+
+        btn_delete = Button(text='Удалить', background_color=(
+            0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
+        btn_cancel = Button(text='Отмена')
+
+        btn_delete.bind(on_press=do_delete)
+        btn_cancel.bind(on_press=cancel_delete)
+
+        btn_layout.add_widget(btn_cancel)
+        btn_layout.add_widget(btn_delete)
+
+        content.add_widget(message)
+        content.add_widget(btn_layout)
+
+        popup = Popup(title='Подтверждение удаления',
+                      content=content,
+                      size_hint=(0.6, 0.4))
+        popup.open()
+
+    def show_add_room_dialog(self, instance):
+        """Показывает диалог добавления комнаты"""
+        content = BoxLayout(orientation='vertical',
+                            spacing=dp(10), padding=dp(20))
+
+        label = Label(text='Название комнаты:', font_size=dp(16))
+        name_input = TextInput(
+            multiline=False,
+            font_size=dp(18),
+            size_hint=(1, 0.4)
+        )
+
+        btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.4))
+
+        btn_confirm = Button(
+            text='Создать',
+            background_color=(0.2, 0.6, 1, 1),
+            color=(1, 1, 1, 1)
+        )
+        btn_cancel = Button(text='Отмена')
+
+        def create_room(inst):
+            name = name_input.text.strip()
+            if name:
+                from models import Room
+                room = Room(name)
+                # Добавляем комнату в текущий проект
+                self.manager.current_project.rooms.append(room)
+                # Сохраняем проект в БД после добавления комнаты
+                save_project(self.manager.current_project)
+                
+                # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД, чтобы получить актуальные ID комнат
+                if self.manager.current_project.id:
+                    updated_project = load_project(self.manager.current_project.id)
+                    if updated_project:
+                        self.manager.current_project = updated_project
+                
+                # Обновляем сетку
+                self.update_rooms_grid()
+                popup.dismiss()
+
+        btn_confirm.bind(on_press=create_room)
+        btn_cancel.bind(on_press=lambda x: popup.dismiss())
+
+        btn_layout.add_widget(btn_cancel)
+        btn_layout.add_widget(btn_confirm)
+
+        content.add_widget(label)
+        content.add_widget(name_input)
+        content.add_widget(btn_layout)
+
+        popup = Popup(
+            title='Новая комната',
+            content=content,
+            size_hint=(0.8, 0.4)
+        )
+        popup.open()
+
+    def open_room_editor(self, room):
+        """Открывает редактор комнаты"""
+        # Сохраняем текущую комнату в менеджере экранов
+        self.manager.current_room = room
+        # Переходим в редактор
+        self.manager.current = 'room_editor'
+
+    def go_back(self, instance):
+        """Возврат к проектам"""
+        # Сохраняем проект при выходе с экрана комнат (если нужно)
+        # save_project(self.manager.current_project)
+        self.manager.current = 'projects'
 
 ============================================================
 ФАЙЛ: utils\__init__.py
@@ -1913,6 +2321,10 @@ class GridWidget(Widget):
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
+            if self.is_touch_on_closing_line(touch):
+                self.add_closing_wall()
+                return True # Обработка завершена            
+        
             # Колесо мыши (оставляем для десктопа)
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
@@ -1922,7 +2334,7 @@ class GridWidget(Widget):
                 self.canvas.clear()
                 self.draw_editor()
                 return True
-            
+
             # Начало пинч-жеста (2 пальца)
             self.touches[touch.id] = touch
             if len(self.touches) == 2:
@@ -1931,13 +2343,24 @@ class GridWidget(Widget):
                 self.pinch_start_scale = self.scale
                 self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
-            
+
             # Одиночное касание — панорамирование
             self.dragging = True
             self.last_touch_pos = (touch.x, touch.y)
             return True
-        
         return super().on_touch_down(touch)
+
+    def is_touch_on_closing_line(self, touch, tolerance=dp(10)):
+        """Проверяет, находится ли касание рядом с линией-доводчиком."""
+        if not self.closing_line_points or len(self.closing_line_points) != 4:
+            return False
+
+        x1, y1, x2, y2 = self.closing_line_points
+        px, py = touch.pos
+
+        # Вычисляем расстояние от точки до линии
+        dist = self.point_to_line_distance(px, py, x1, y1, x2, y2)
+        return dist < tolerance
 
     def on_touch_move(self, touch):
         if touch.id in self.touches and len(self.touches) == 2:
@@ -2497,40 +2920,37 @@ class LayoutWidget(Widget):
             # Пинч-масштабирование
             touches = list(self.touches.values())
             current_distance = self.get_distance(touches[0], touches[1])
-
             if self.pinch_start_distance:
                 scale_factor = current_distance / self.pinch_start_distance
                 new_scale = self.pinch_start_scale * scale_factor
                 new_scale = max(0.1, min(2.0, new_scale))
-
                 if self.pinch_center:
                     old_center_x = (
                         self.pinch_center[0] - self.offset_x) / self.scale
                     old_center_y = (
                         self.pinch_center[1] - self.offset_y) / self.scale
-
                     self.scale = new_scale
                     self.offset_x = self.pinch_center[0] - \
                         old_center_x * self.scale
                     self.offset_y = self.pinch_center[1] - \
                         old_center_y * self.scale
-
-                self.draw_layout()
-                return True
+                    self.draw_layout()
+            return True
 
         # Обработка перетаскивания (один палец)
         if self.dragging and self.dragging_enabled:
             dx_px = touch.x - self.last_touch_pos[0]
             dy_px = touch.y - self.last_touch_pos[1]
-            dx_cm = dx_px / self.scale
-            dy_cm = dy_px / self.scale
-
+            # --- ИЗМЕНЕНИЕ ---
+            # Округляем смещение до целых сантиметров перед добавлением
+            dx_cm = round(dx_px / self.scale)
+            dy_cm = round(dy_px / self.scale)
+            # ---
             self.grid_offset_x += dx_cm
             self.grid_offset_y += dy_cm
             self.last_touch_pos = touch.pos
-
             if self.on_grid_move:
-                self.on_grid_move()
+                self.on_grid_move() # Вызов callback для обновления
             self.draw_layout()
             return True
 

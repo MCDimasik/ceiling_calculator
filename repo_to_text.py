@@ -25,7 +25,8 @@ def should_skip_dir(dir_name):
     skip_dirs = {
         '.git', '__pycache__', 'node_modules', 'venv', 'env', '.venv',
         '.idea', '.vscode', '.DS_Store', 'dist', 'build', 'coverage',
-        '.pytest_cache', '.mypy_cache', '.tox', '.eggs', '*.egg-info'
+        '.pytest_cache', '.mypy_cache', '.tox', '.eggs', '*.egg-info',
+        'api_service'
     }
     return dir_name in skip_dirs or dir_name.endswith('.egg-info')
 
@@ -112,3 +113,4 @@ if __name__ == "__main__":
     output_file = sys.argv[2] if len(sys.argv) > 2 else "repo_summary.txt"
 
     generate_repo_summary(repo_path, output_file)
+
