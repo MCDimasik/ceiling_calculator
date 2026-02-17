@@ -3,11 +3,9 @@ from kivy.graphics import Color, Line, Rectangle, Mesh
 from kivy.properties import NumericProperty, ObjectProperty, BooleanProperty
 from kivy.metrics import dp
 from kivy.core.text import Label as CoreLabel
-from kivy.graphics import StencilPush
 from kivy.clock import Clock
 from functools import partial
 from kivy.graphics.stencil_instructions import StencilPush, StencilUse, StencilUnUse, StencilPop
-
 
 class LayoutWidget(Widget):
     """Виджет для отображения раскладки 60×60 см"""
@@ -19,7 +17,7 @@ class LayoutWidget(Widget):
     grid_offset_y = NumericProperty(0)
     on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
     dragging_enabled = BooleanProperty(True)
-    show_dimensions = BooleanProperty(True) 
+    show_dimensions = BooleanProperty(True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -171,22 +169,23 @@ class LayoutWidget(Widget):
 
     def draw_layout(self):
         self.canvas.clear()
+
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-            
+
             # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-            
+
             # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-            
+
             # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-            
+
             # 4. Рисуем цифры ТОЛЬКО если включено
-            if self.show_dimensions:  # ← УСЛОВИЕ ДОБАВЛЕНО
+            if self.show_dimensions:
                 self.draw_all_cut_dimensions()
 
     def draw_all_cut_dimensions(self):
@@ -272,54 +271,56 @@ class LayoutWidget(Widget):
         """Правильная заливка внутренней области комнаты для сложных форм"""
         if len(self.walls) < 3:
             return
-
+        
         # Собираем точки в правильном порядке
         points = []
         if self.walls:
             points.append((self.walls[0][0], self.walls[0][1]))
             for wall in self.walls:
                 points.append((wall[2], wall[3]))
-            if points[-1] != points[0]:
-                points.append(points[0])
-
+        
+        if points[-1] != points[0]:
+            points.append(points[0])
+        
         if len(points) < 4:
             return
-
+        
         # Преобразуем точки в экранные координаты
         screen_points = []
         for x, y in points:
             px = self.cm_to_px(x, y)
             screen_points.extend([px[0], px[1]])
-
+        
         if len(screen_points) < 8:
             return
-
+        
         with self.canvas:
-            # Используем stencil для правильной заливки
-            StencilPush()
-            Color(1, 1, 1, 1)
-
-            # Рисуем контур для stencil
-            Line(points=screen_points, close=True, width=1)
-
-            StencilUse()
-
-            # Заливаем ВНУТРЬ контура
+            # ← УДАЛИТЬ Stencil, использовать Mesh как в grid_widget.py
             Color(*self.room_color)
-            # Используем больший прямоугольник для гарантии заполнения
-            min_x = min(screen_points[i]
-                        for i in range(0, len(screen_points), 2))
-            max_x = max(screen_points[i]
-                        for i in range(0, len(screen_points), 2))
-            min_y = min(screen_points[i]
-                        for i in range(1, len(screen_points), 2))
-            max_y = max(screen_points[i]
-                        for i in range(1, len(screen_points), 2))
-            Rectangle(pos=(min_x, min_y), size=(max_x-min_x, max_y-min_y))
-
-            StencilUnUse()
-            StencilPop()
-
+            
+            # Создаем Mesh для заливки сложных форм
+            vertices = []
+            indices = []
+            
+            # Используем триангуляцию "веером" от центра масс
+            center_x = sum(screen_points[i] for i in range(0, len(screen_points), 2)) / (len(screen_points) // 2)
+            center_y = sum(screen_points[i] for i in range(1, len(screen_points), 2)) / (len(screen_points) // 2)
+            
+            # Создаем треугольники от центра к каждой паре соседних точек
+            for i in range(0, len(screen_points) - 2, 2):
+                # Центр
+                vertices.extend([center_x, center_y, 0, 0])
+                # Текущая точка
+                vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
+                # Следующая точка
+                vertices.extend([screen_points[i+2], screen_points[i+3], 0, 0])
+            
+            # Создаем индексы для треугольников
+            indices = list(range(len(vertices) // 4))
+            
+            if vertices:
+                Mesh(vertices=vertices, indices=indices, mode='triangles')
+            
             # Рисуем контур поверх заливки
             Color(*self.wall_color)
             Line(points=screen_points, close=True, width=2)
@@ -537,7 +538,7 @@ class LayoutWidget(Widget):
             self.grid_offset_y += dy_cm
             self.last_touch_pos = touch.pos
             if self.on_grid_move:
-                self.on_grid_move() # Вызов callback для обновления
+                self.on_grid_move()  # Вызов callback для обновления
             self.draw_layout()
             return True
 

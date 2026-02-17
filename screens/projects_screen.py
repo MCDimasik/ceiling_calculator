@@ -53,13 +53,13 @@ class ProjectsScreen(Screen):
         toolbar = BoxLayout(
             size_hint=(1, 0.15),
             padding=dp(10),
-            spacing=dp(10)
+            spacing=dp(10)  # ← КРИТИЧНО: отступ между кнопками
         )
-
+        
         # Кнопка "Назад" на главный экран
         btn_back = Button(
             text='← Назад',
-            font_size=dp(16),
+            font_size=dp(14),
             size_hint=(0.3, 1),
             background_color=(0.8, 0.8, 0.8, 1)
         )
@@ -68,7 +68,7 @@ class ProjectsScreen(Screen):
         # Заголовок
         title = Label(
             text='Мои проекты',
-            font_size=dp(20),
+            font_size=dp(18),
             size_hint=(0.4, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -78,8 +78,8 @@ class ProjectsScreen(Screen):
 
         # Кнопка "Добавить проект" с переносом текста
         btn_add = Button(
-            text='+ Новый\nпроект',  # Перенос на новую строку
-            font_size=dp(14),
+            text='+ Новый\nпроект',
+            font_size=dp(12),
             size_hint=(0.3, 1),
             background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1),
@@ -128,20 +128,20 @@ class ProjectsScreen(Screen):
     def update_projects_grid(self):
         """Обновляет сетку проектов"""
         self.projects_container.clear_widgets()
-        
+
         # Устанавливаем параметры сетки
         self.projects_container.cols = 2
         self.projects_container.spacing = dp(10)
         self.projects_container.padding = dp(10)
-        
+
         # Добавляем плитки проектов
         for project in self.projects:
             project_tile = self.create_project_tile(project)
             self.projects_container.add_widget(project_tile)
-        
+
         # Автоматически устанавливаем высоту контейнера на основе содержимого
         self.projects_container.height = self.projects_container.minimum_height
-        
+
         # Если проектов нет
         if not self.projects:
             empty_label = Label(
@@ -159,39 +159,72 @@ class ProjectsScreen(Screen):
 
     def create_project_tile(self, project):
         """Создает плитку для проекта с кнопкой удаления"""
-        # Вычисляем ширину плитки
         container_width = self.projects_container.width if self.projects_container.width > 0 else self.width
-        tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        
-        # Используем RelativeLayout для точного позиционирования элементов
+        tile_width = (container_width - dp(30)) / \
+            2 if container_width > 0 else dp(150)
+
         tile_layout = RelativeLayout(
             size_hint=(None, None),
             size=(tile_width, tile_width)
         )
-        
-        # Основная плитка - кнопка с фоном
+
+        # ← КРИТИЧНО: Загружаем проект с комнатами для расчета площади
+        from database import load_project
+        from models import CeilingLayout
+        total_area = 0.0
+
+        # Загружаем полный проект с комнатами
+        full_project = load_project(project.id) if project.id else None
+        if full_project and full_project.rooms:
+            for room in full_project.rooms:
+                try:
+                    # ← КРИТИЧНО: Проверяем что стены есть
+                    if room.walls and len(room.walls) >= 3:
+                        temp_layout = CeilingLayout(room)
+                        # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                        temp_layout.calculate_layout()
+                        total_area += temp_layout.room_area_sqm if hasattr(
+                            temp_layout, 'room_area_sqm') else 0.0
+                except Exception as e:
+                    print(
+                        f"Ошибка расчета площади для комнаты {room.name}: {e}")
+                    continue
+
+        # ← КРИТИЧНО: правильное форматирование текста (2 строки)
+        if total_area > 0:
+            button_text = f"{project.name}\n{total_area:.1f} м²"
+        else:
+            button_text = project.name
+
         tile_button = Button(
             background_color=(0.95, 0.95, 0.95, 1),
             background_normal='',
-            text=project.name,
+            text=button_text,
             font_size=dp(16),
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), None),
-            shorten=True,
+            text_size=(tile_width - dp(20), tile_width -
+                       dp(20)),  # ← Оба размера!
+            shorten=False,
             max_lines=2
         )
-        tile_button.bind(size=tile_button.setter('text_size'))
-        tile_button.bind(on_press=lambda instance, p=project: self.open_project(p))
-        
-        # Контейнер для кнопки удаления (точно в правом верхнем углу)
+
+        # ← КРИТИЧНО: Привязка для обновления text_size при изменении размера кнопки
+        tile_button.bind(
+            size=lambda inst, size: setattr(
+                inst, 'text_size', (size[0] - dp(20), size[1] - dp(20)))
+        )
+
+        tile_button.bind(on_press=lambda instance,
+                         p=project: self.open_project(p))
+
+        # Кнопка удаления
         delete_container = BoxLayout(
             size_hint=(None, None),
             size=(dp(25), dp(25)),
-            pos_hint={'right': 1, 'top': 1}  # Позиционируем в правом верхнем углу
+            pos_hint={'right': 1, 'top': 1}
         )
-        
         delete_button = Button(
             text='X',
             font_size=dp(12),
@@ -201,19 +234,18 @@ class ProjectsScreen(Screen):
             halign='center',
             valign='middle'
         )
-        delete_button.bind(on_press=lambda instance, p_id=project.id: self.confirm_delete_project(p_id))
-        
+        delete_button.bind(on_press=lambda instance,
+                           p_id=project.id: self.confirm_delete_project(p_id))
         delete_container.add_widget(delete_button)
-        
-        # Добавляем элементы в RelativeLayout
-        tile_layout.add_widget(tile_button)  # Основная кнопка снизу
-        tile_layout.add_widget(delete_container)  # Кнопка удаления поверх
-        
+
+        tile_layout.add_widget(tile_button)
+        tile_layout.add_widget(delete_container)
         return tile_layout
-    
+
     def confirm_delete_project(self, project_id):
         """Показывает диалог подтверждения удаления проекта."""
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+        content = BoxLayout(orientation='vertical',
+                            spacing=dp(10), padding=dp(10))
         message = Label(text='Вы точно хотите удалить?', font_size=dp(16))
 
         btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.3))
@@ -228,7 +260,8 @@ class ProjectsScreen(Screen):
         def cancel_delete(dt):
             popup.dismiss()
 
-        btn_delete = Button(text='Удалить', background_color=(0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
+        btn_delete = Button(text='Удалить', background_color=(
+            0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
         btn_cancel = Button(text='Отмена')
 
         btn_delete.bind(on_press=do_delete)

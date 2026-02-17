@@ -34,9 +34,538 @@ ceiling_calculator/
 
 
 ============================================================
+ФАЙЛ: .github\workflows\build-apk.yml
+============================================================
+
+name: Build Simple Kivy APK
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Python 3.8
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.8'
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git openjdk-11-jdk python3-dev zlib1g-dev
+    
+    - name: Install Buildozer
+      run: |
+        pip install buildozer==1.4.0
+        pip install cython==0.29.21
+    
+    - name: Create minimal spec
+      run: |
+        if [ ! -f buildozer.spec ]; then
+          echo "[app]" > buildozer.spec
+          echo "title = MyApp" >> buildozer.spec
+          echo "package.name = myapp" >> buildozer.spec
+          echo "package.domain = org.test" >> buildozer.spec
+          echo "source.dir = ." >> buildozer.spec
+          echo "source.include_exts = py,png,jpg,kv" >> buildozer.spec
+          echo "version = 1.0" >> buildozer.spec
+          echo "requirements = python3,kivy==2.0.0" >> buildozer.spec
+          echo "orientation = portrait" >> buildozer.spec
+          echo "android.permissions = INTERNET" >> buildozer.spec
+          echo "android.archs = arm64-v8a" >> buildozer.spec
+          echo "android.api = 30" >> buildozer.spec
+          echo "android.minapi = 21" >> buildozer.spec
+          echo "android.sdk = 30" >> buildozer.spec
+          echo "android.ndk = 21.3.6528147" >> buildozer.spec
+          echo "debug = 1" >> buildozer.spec
+          echo "" >> buildozer.spec
+          echo "[buildozer]" >> buildozer.spec
+          echo "log_level = 2" >> buildozer.spec
+        fi
+    
+    - name: Accept licenses
+      run: |
+        mkdir -p ~/.android/licenses
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/licenses/android-sdk-license
+    
+    - name: Build APK
+      run: |
+        echo "y" | buildozer android debug
+        
+        mkdir -p artifacts
+        cp bin/*.apk artifacts/app.apk 2>/dev/null || true
+    
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-apk
+        path: artifacts/*.apk
+
+============================================================
 ФАЙЛ: .gitignore
 ============================================================
 
+
+
+============================================================
+ФАЙЛ: buildozer.spec
+============================================================
+
+[app]
+
+# (str) Title of your application
+title = ceiling Calculator beta
+
+# (str) Package name
+package.name = ceiling_calculator_beta
+
+# (str) Package domain (needed for android/ios packaging)
+package.domain = org.test
+
+# (str) Source code where the main.py live
+source.dir = .
+
+# (list) Source files to include (let empty to include all the files)
+source.include_exts = py,png,jpg,kv,atlas
+
+# (list) List of inclusions using pattern matching
+#source.include_patterns = assets/*,images/*.png
+
+# (list) Source files to exclude (let empty to not exclude anything)
+#source.exclude_exts = spec
+
+# (list) List of directory to exclude (let empty to not exclude anything)
+#source.exclude_dirs = tests, bin, venv
+
+# (list) List of exclusions using pattern matching
+# Do not prefix with './'
+#source.exclude_patterns = license,images/*/*.jpg
+
+# (str) Application versioning (method 1)
+version = 0.6
+
+# (str) Application versioning (method 2)
+# version.regex = __version__ = ['"](.*)['"]
+# version.filename = %(source.dir)s/main.py
+
+# (list) Application requirements
+# comma separated e.g. requirements = sqlite3,kivy
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow
+
+# (str) Custom source folders for requirements
+# Sets custom source for any requirements with recipes
+# requirements.source.kivy = ../../kivy
+
+# (str) Presplash of the application
+#presplash.filename = %(source.dir)s/data/presplash.png
+
+# (str) Icon of the application
+#icon.filename = %(source.dir)s/data/icon.png
+
+# (list) Supported orientations
+# Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
+orientation = portrait
+
+# (list) List of service to declare
+#services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
+
+#
+# OSX Specific
+#
+
+#
+# author = © Copyright Info
+
+# change the major version of python used by the app
+osx.python_version = 3
+
+# Kivy version to use
+osx.kivy_version = 1.9.1
+
+#
+# Android specific
+#
+
+# (bool) Indicate if the application should be fullscreen or not
+fullscreen = 1
+
+# (string) Presplash background color (for android toolchain)
+# Supported formats are: #RRGGBB #AARRGGBB or one of the following names:
+# red, blue, green, black, white, gray, cyan, magenta, yellow, lightgray,
+# darkgray, grey, lightgrey, darkgrey, aqua, fuchsia, lime, maroon, navy,
+# olive, purple, silver, teal.
+#android.presplash_color = #FFFFFF
+
+# (string) Presplash animation using Lottie format.
+# see https://lottiefiles.com/ for examples and https://airbnb.design/lottie/
+# for general documentation.
+# Lottie files can be created using various tools, like Adobe After Effect or Synfig.
+#android.presplash_lottie = "path/to/lottie/file.json"
+
+# (str) Adaptive icon of the application (used if Android API level is 26+ at runtime)
+#icon.adaptive_foreground.filename = %(source.dir)s/data/icon_fg.png
+#icon.adaptive_background.filename = %(source.dir)s/data/icon_bg.png
+
+# (list) Permissions
+# (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
+#android.permissions = android.permission.INTERNET, (name=android.permission.WRITE_EXTERNAL_STORAGE;maxSdkVersion=18)
+
+# (list) features (adds uses-feature -tags to manifest)
+#android.features = android.hardware.usb.host
+
+# (int) Target Android API, should be as high as possible.
+android.api = 31
+
+# (int) Minimum API your APK / AAB will support.
+android.minapi = 21
+
+#android.sdk = 20
+
+# (str) Android NDK version to use
+android.ndk = 25b
+
+# (int) Android NDK API to use. This is the minimum API your app will support, it should usually match android.minapi.
+#android.ndk_api = 21
+
+# (bool) Use --private data storage (True) or --dir public storage (False)
+#android.private_storage = True
+
+# (str) Android NDK directory (if empty, it will be automatically downloaded.)
+#android.ndk_path =
+
+# (str) Android SDK directory (if empty, it will be automatically downloaded.)
+#android.sdk_path =
+
+# (str) ANT directory (if empty, it will be automatically downloaded.)
+#android.ant_path =
+
+# (bool) If True, then skip trying to update the Android sdk
+# This can be useful to avoid excess Internet downloads or save time
+# when an update is due and you just want to test/build your package
+# android.skip_update = False
+
+# (bool) If True, then automatically accept SDK license
+# agreements. This is intended for automation only. If set to False,
+# the default, you will be shown the license when first running
+# buildozer.
+# android.accept_sdk_license = False
+
+# (str) Android entry point, default is ok for Kivy-based app
+#android.entrypoint = org.kivy.android.PythonActivity
+
+# (str) Full name including package path of the Java class that implements Android Activity
+# use that parameter together with android.entrypoint to set custom Java class instead of PythonActivity
+#android.activity_class_name = org.kivy.android.PythonActivity
+
+# (str) Extra xml to write directly inside the <manifest> element of AndroidManifest.xml
+# use that parameter to provide a filename from where to load your custom XML code
+#android.extra_manifest_xml = ./src/android/extra_manifest.xml
+
+# (str) Extra xml to write directly inside the <manifest><application> tag of AndroidManifest.xml
+# use that parameter to provide a filename from where to load your custom XML arguments:
+#android.extra_manifest_application_arguments = ./src/android/extra_manifest_application_arguments.xml
+
+# (str) Full name including package path of the Java class that implements Python Service
+# use that parameter to set custom Java class which extends PythonService
+#android.service_class_name = org.kivy.android.PythonService
+
+# (str) Android app theme, default is ok for Kivy-based app
+# android.apptheme = "@android:style/Theme.NoTitleBar"
+
+# (list) Pattern to whitelist for the whole project
+#android.whitelist =
+
+# (str) Path to a custom whitelist file
+#android.whitelist_src =
+
+# (str) Path to a custom blacklist file
+#android.blacklist_src =
+
+# (list) List of Java .jar files to add to the libs so that pyjnius can access
+# their classes. Don't add jars that you do not need, since extra jars can slow
+# down the build process. Allows wildcards matching, for example:
+# OUYA-ODK/libs/*.jar
+#android.add_jars = foo.jar,bar.jar,path/to/more/*.jar
+
+# (list) List of Java files to add to the android project (can be java or a
+# directory containing the files)
+#android.add_src =
+
+# (list) Android AAR archives to add
+#android.add_aars =
+
+# (list) Put these files or directories in the apk assets directory.
+# Either form may be used, and assets need not be in 'source.include_exts'.
+# 1) android.add_assets = source_asset_relative_path
+# 2) android.add_assets = source_asset_path:destination_asset_relative_path
+#android.add_assets =
+
+# (list) Put these files or directories in the apk res directory.
+# The option may be used in three ways, the value may contain one or zero ':'
+# Some examples:
+# 1) A file to add to resources, legal resource names contain ['a-z','0-9','_']
+# android.add_resources = my_icons/all-inclusive.png:drawable/all_inclusive.png
+# 2) A directory, here  'legal_icons' must contain resources of one kind
+# android.add_resources = legal_icons:drawable
+# 3) A directory, here 'legal_resources' must contain one or more directories, 
+# each of a resource kind:  drawable, xml, etc...
+# android.add_resources = legal_resources
+#android.add_resources =
+
+# (list) Gradle dependencies to add
+#android.gradle_dependencies =
+
+# (bool) Enable AndroidX support. Enable when 'android.gradle_dependencies'
+# contains an 'androidx' package, or any package from Kotlin source.
+# android.enable_androidx requires android.api >= 28
+#android.enable_androidx = True
+
+# (list) add java compile options
+# this can for example be necessary when importing certain java libraries using the 'android.gradle_dependencies' option
+# see https://developer.android.com/studio/write/java8-support for further information
+# android.add_compile_options = "sourceCompatibility = 1.8", "targetCompatibility = 1.8"
+
+# (list) Gradle repositories to add {can be necessary for some android.gradle_dependencies}
+# please enclose in double quotes 
+# e.g. android.gradle_repositories = "maven { url 'https://kotlin.bintray.com/ktor' }"
+#android.add_gradle_repositories =
+
+# (list) packaging options to add 
+# see https://google.github.io/android-gradle-dsl/current/com.android.build.gradle.internal.dsl.PackagingOptions.html
+# can be necessary to solve conflicts in gradle_dependencies
+# please enclose in double quotes 
+# e.g. android.add_packaging_options = "exclude 'META-INF/common.kotlin_module'", "exclude 'META-INF/*.kotlin_module'"
+#android.add_packaging_options =
+
+# (list) Java classes to add as activities to the manifest.
+#android.add_activities = com.example.ExampleActivity
+
+# (str) OUYA Console category. Should be one of GAME or APP
+# If you leave this blank, OUYA support will not be enabled
+#android.ouya.category = GAME
+
+# (str) Filename of OUYA Console icon. It must be a 732x412 png image.
+#android.ouya.icon.filename = %(source.dir)s/data/ouya_icon.png
+
+# (str) XML file to include as an intent filters in <activity> tag
+#android.manifest.intent_filters =
+
+# (list) Copy these files to src/main/res/xml/ (used for example with intent-filters)
+#android.res_xml = PATH_TO_FILE,
+
+# (str) launchMode to set for the main activity
+#android.manifest.launch_mode = standard
+
+# (str) screenOrientation to set for the main activity.
+# Valid values can be found at https://developer.android.com/guide/topics/manifest/activity-element
+#android.manifest.orientation = fullSensor
+
+# (list) Android additional libraries to copy into libs/armeabi
+#android.add_libs_armeabi = libs/android/*.so
+#android.add_libs_armeabi_v7a = libs/android-v7/*.so
+#android.add_libs_arm64_v8a = libs/android-v8/*.so
+#android.add_libs_x86 = libs/android-x86/*.so
+#android.add_libs_mips = libs/android-mips/*.so
+
+# (bool) Indicate whether the screen should stay on
+# Don't forget to add the WAKE_LOCK permission if you set this to True
+#android.wakelock = False
+
+# (list) Android application meta-data to set (key=value format)
+#android.meta_data =
+
+# (list) Android library project to add (will be added in the
+# project.properties automatically.)
+#android.library_references =
+
+# (list) Android shared libraries which will be added to AndroidManifest.xml using <uses-library> tag
+#android.uses_library =
+
+# (str) Android logcat filters to use
+#android.logcat_filters = *:S python:D
+
+# (bool) Android logcat only display log for activity's pid
+#android.logcat_pid_only = False
+
+# (str) Android additional adb arguments
+#android.adb_args = -H host.docker.internal
+
+# (bool) Copy library instead of making a libpymodules.so
+#android.copy_libs = 1
+
+# (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
+# In past, was `android.arch` as we weren't supporting builds for multiple archs at the same time.
+android.archs = arm64-v8a
+
+# (int) overrides automatic versionCode computation (used in build.gradle)
+# this is not the same as app version and should only be edited if you know what you're doing
+# android.numeric_version = 1
+
+# (bool) enables Android auto backup feature (Android API >=23)
+android.allow_backup = True
+
+# (str) XML file for custom backup rules (see official auto backup documentation)
+# android.backup_rules =
+
+# (str) If you need to insert variables into your AndroidManifest.xml file,
+# you can do so with the manifestPlaceholders property.
+# This property takes a map of key-value pairs. (via a string)
+# Usage example : android.manifest_placeholders = [myCustomUrl:\"org.kivy.customurl\"]
+# android.manifest_placeholders = [:]
+
+# (bool) Skip byte compile for .py files
+# android.no-byte-compile-python = False
+
+# (str) The format used to package the app for release mode (aab or apk or aar).
+# android.release_artifact = aab
+
+# (str) The format used to package the app for debug mode (apk or aar).
+# android.debug_artifact = apk
+
+#
+# Python for android (p4a) specific
+#
+
+# (str) python-for-android URL to use for checkout
+#p4a.url =
+
+# (str) python-for-android fork to use in case if p4a.url is not specified, defaults to upstream (kivy)
+#p4a.fork = kivy
+
+# (str) python-for-android branch to use, defaults to master
+p4a.branch = master
+
+# (str) python-for-android specific commit to use, defaults to HEAD, must be within p4a.branch
+#p4a.commit = HEAD
+
+# (str) python-for-android git clone directory (if empty, it will be automatically cloned from github)
+#p4a.source_dir =
+
+# (str) The directory in which python-for-android should look for your own build recipes (if any)
+#p4a.local_recipes =
+
+# (str) Filename to the hook for p4a
+#p4a.hook =
+
+# (str) Bootstrap to use for android builds
+# p4a.bootstrap = sdl2
+
+# (int) port number to specify an explicit --port= p4a argument (eg for bootstrap flask)
+#p4a.port =
+
+# Control passing the --use-setup-py vs --ignore-setup-py to p4a
+# "in the future" --use-setup-py is going to be the default behaviour in p4a, right now it is not
+# Setting this to false will pass --ignore-setup-py, true will pass --use-setup-py
+# NOTE: this is general setuptools integration, having pyproject.toml is enough, no need to generate
+# setup.py if you're using Poetry, but you need to add "toml" to source.include_exts.
+#p4a.setup_py = false
+
+# (str) extra command line arguments to pass when invoking pythonforandroid.toolchain
+#p4a.extra_args =
+
+
+
+#
+# iOS specific
+#
+
+# (str) Path to a custom kivy-ios folder
+#ios.kivy_ios_dir = ../kivy-ios
+# Alternately, specify the URL and branch of a git checkout:
+ios.kivy_ios_url = https://github.com/kivy/kivy-ios
+ios.kivy_ios_branch = master
+
+# Another platform dependency: ios-deploy
+# Uncomment to use a custom checkout
+#ios.ios_deploy_dir = ../ios_deploy
+# Or specify URL and branch
+ios.ios_deploy_url = https://github.com/phonegap/ios-deploy
+ios.ios_deploy_branch = 1.10.0
+
+# (bool) Whether or not to sign the code
+ios.codesign.allowed = false
+
+# (str) Name of the certificate to use for signing the debug version
+# Get a list of available identities: buildozer ios list_identities
+#ios.codesign.debug = "iPhone Developer: <lastname> <firstname> (<hexstring>)"
+
+# (str) The development team to use for signing the debug version
+#ios.codesign.development_team.debug = <hexstring>
+
+# (str) Name of the certificate to use for signing the release version
+#ios.codesign.release = %(ios.codesign.debug)s
+
+# (str) The development team to use for signing the release version
+#ios.codesign.development_team.release = <hexstring>
+
+# (str) URL pointing to .ipa file to be installed
+# This option should be defined along with `display_image_url` and `full_size_image_url` options.
+#ios.manifest.app_url =
+
+# (str) URL pointing to an icon (57x57px) to be displayed during download
+# This option should be defined along with `app_url` and `full_size_image_url` options.
+#ios.manifest.display_image_url =
+
+# (str) URL pointing to a large icon (512x512px) to be used by iTunes
+# This option should be defined along with `app_url` and `display_image_url` options.
+#ios.manifest.full_size_image_url =
+
+
+[buildozer]
+
+# (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
+log_level = 2
+
+# (int) Display warning if buildozer is run as root (0 = False, 1 = True)
+warn_on_root = 1
+
+# (str) Path to build artifact storage, absolute or relative to spec file
+# build_dir = ./.buildozer
+
+# (str) Path to build output (i.e. .apk, .aab, .ipa) storage
+# bin_dir = ./bin
+
+#    -----------------------------------------------------------------------------
+#    List as sections
+#
+#    You can define all the "list" as [section:key].
+#    Each line will be considered as a option to the list.
+#    Let's take [app] / source.exclude_patterns.
+#    Instead of doing:
+#
+#[app]
+#source.exclude_patterns = license,data/audio/*.wav,data/images/original/*
+#
+#    This can be translated into:
+#
+#[app:source.exclude_patterns]
+#license
+#data/audio/*.wav
+#data/images/original/*
+#
+
+
+#    -----------------------------------------------------------------------------
+#    Profiles
+#
+#    You can extend section / key with a profile
+#    For example, you want to deploy a demo version of your application without
+#    HD content. You could first change the title to add "(demo)" in the name
+#    and extend the excluded directories to remove the HD content.
+#
+#[app@demo]
+#title = My Application (demo)
+#
+#[app:source.exclude_patterns@demo]
+#images/hd/*
+#
+#    Then, invoke the command line with the "demo" profile:
+#
+#buildozer --profile demo android debug
 
 ============================================================
 ФАЙЛ: database.py
@@ -46,7 +575,7 @@ ceiling_calculator/
 import sqlite3
 import json
 from datetime import datetime
-from models import Project, Room  # Предполагается, что модели определены так же
+from models import Project, Room
 
 DB_NAME = "ceiling_calculator.db"
 
@@ -55,27 +584,25 @@ def init_db():
     """Инициализирует базу данных и создает таблицы."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
-    # Таблица для проектов
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
+    CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
     """)
-
-    # Таблица для комнат
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            walls_json TEXT NOT NULL, -- Хранение стен как JSON
-            last_position_json TEXT,  -- Опционально: последняя позиция в редакторе
-            FOREIGN KEY (project_id) REFERENCES projects (id)
-        )
+    CREATE TABLE IF NOT EXISTS rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        walls_json TEXT NOT NULL,
+        last_position_json TEXT,
+        grid_offset_x INTEGER DEFAULT 0,  -- Новое поле
+        grid_offset_y INTEGER DEFAULT 0,  -- Новое поле
+        FOREIGN KEY (project_id) REFERENCES projects (id)
+    )
     """)
     conn.commit()
     conn.close()
@@ -85,32 +612,30 @@ def save_project(project):
     """Сохраняет проект (и его комнаты) в базу данных."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     try:
-        # Вставка или обновление проекта
         if project.id is None:
             cursor.execute("""
-                INSERT INTO projects (name, created_at) VALUES (?, ?)
+            INSERT INTO projects (name, created_at) VALUES (?, ?)
             """, (project.name, project.created_at.isoformat()))
             project.id = cursor.lastrowid
         else:
             cursor.execute("""
-                UPDATE projects SET name = ?, created_at = ?
-                WHERE id = ?
+            UPDATE projects SET name = ?, created_at = ?
+            WHERE id = ?
             """, (project.name, project.created_at.isoformat(), project.id))
 
-        # Удаление существующих комнат проекта перед обновлением (для простоты)
         cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project.id,))
 
-        # Вставка комнат
         for room in project.rooms:
             walls_json_str = json.dumps(room.walls)
             last_pos_json_str = json.dumps(room.last_position) if hasattr(
-                room, 'last_position') else None
+                room, 'last_position') and room.last_position else None
+            grid_offset_x = getattr(room, 'grid_offset_x', 0)
+            grid_offset_y = getattr(room, 'grid_offset_y', 0)
             cursor.execute("""
-                INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json)
-                VALUES (?, ?, ?, ?, ?)
-            """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str))
+            INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str, grid_offset_x, grid_offset_y))
 
         conn.commit()
         print(f"Проект '{project.name}' успешно сохранен в базу данных.")
@@ -125,35 +650,33 @@ def load_project(project_id):
     """Загружает проект (и его комнаты) из базы данных по ID."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     try:
-        # Загрузка проекта
         cursor.execute(
             "SELECT id, name, created_at FROM projects WHERE id = ?", (project_id,))
         row = cursor.fetchone()
         if row is None:
             return None
+        project = Project(row[1])
+        project.id = row[0]
+        project.created_at = datetime.fromisoformat(row[2])
 
-        project = Project(row[1])  # name
-        project.id = row[0]       # id
-        project.created_at = datetime.fromisoformat(row[2])  # created_at
-
-        # Загрузка комнат проекта
         cursor.execute(
-            "SELECT id, name, created_at, walls_json, last_position_json FROM rooms WHERE project_id = ?", (project_id,))
+            "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y FROM rooms WHERE project_id = ?", (project_id,))
         for room_row in cursor.fetchall():
-            room = Room(room_row[1])  # name
-            room.id = room_row[0]    # id
-            room.created_at = datetime.fromisoformat(room_row[2])  # created_at
-            room.walls = json.loads(room_row[3])  # walls_json
-            if room_row[4]:  # last_position_json
+            room = Room(room_row[1])
+            room.id = room_row[0]
+            room.created_at = datetime.fromisoformat(room_row[2])
+            room.walls = json.loads(room_row[3])
+            if room_row[4]:
                 room.last_position = json.loads(room_row[4])
-
+            # Новое поле
+            room.grid_offset_x = room_row[5] if room_row[5] else 0
+            # Новое поле
+            room.grid_offset_y = room_row[6] if room_row[6] else 0
             project.rooms.append(room)
 
         print(f"Проект '{project.name}' успешно загружен из базы данных.")
         return project
-
     except sqlite3.Error as e:
         print(f"Ошибка при загрузке проекта из базы данных: {e}")
         return None
@@ -165,16 +688,15 @@ def load_all_projects():
     """Загружает список всех проектов (без комнат)."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     try:
         cursor.execute(
             "SELECT id, name, created_at FROM projects ORDER BY created_at DESC")
         rows = cursor.fetchall()
         projects = []
         for row in rows:
-            proj = Project(row[1])  # name
-            proj.id = row[0]       # id
-            proj.created_at = datetime.fromisoformat(row[2])  # created_at
+            proj = Project(row[1])
+            proj.id = row[0]
+            proj.created_at = datetime.fromisoformat(row[2])
             projects.append(proj)
         return projects
     except sqlite3.Error as e:
@@ -184,27 +706,12 @@ def load_all_projects():
         conn.close()
 
 
-def update_room(room):
-    """Обновляет конкретную комнату в базе данных."""
-    # Предполагается, что у комнаты уже есть project_id
-    # Нужно найти project_id, к которому принадлежит комната
-    # Это может быть сложно, если у нас есть только объект Room
-    # Лучше передавать project_id явно или обновлять через проект
-    # Реализация зависит от того, как ты будешь использовать эту функцию
-    # В текущем контексте, возможно, проще сохранять весь проект целиком
-    pass  # Пока не используется напрямую, save_project обновляет комнаты
-
-# --- Добавим функции для удаления ---
-
-
 def delete_project(project_id):
     """Удаляет проект и все его комнаты из базы данных."""
-    conn = sqlite3.connect('ceiling_calculator.db')
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
-        # Удаляем комнаты проекта (каскадное удаление через внешний ключ)
         cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project_id,))
-        # Удаляем сам проект
         cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
         print(f"Проект с ID {project_id} и его комнаты успешно удалены.")
@@ -219,16 +726,19 @@ def delete_project(project_id):
 
 def delete_room_from_project(project_id, room_id):
     """Удаляет комнату из базы данных, связанной с проектом."""
-    conn = sqlite3.connect('ceiling_calculator.db')
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM rooms WHERE id = ? AND project_id = ?", (room_id, project_id))
+        cursor.execute(
+            "DELETE FROM rooms WHERE id = ? AND project_id = ?", (room_id, project_id))
         conn.commit()
         if cursor.rowcount > 0:
-            print(f"Комната с ID {room_id} из проекта с ID {project_id} успешно удалена.")
+            print(
+                f"Комната с ID {room_id} из проекта с ID {project_id} успешно удалена.")
             return True
         else:
-            print(f"Комната с ID {room_id} не найдена в проекте с ID {project_id}.")
+            print(
+                f"Комната с ID {room_id} не найдена в проекте с ID {project_id}.")
             return False
     except sqlite3.Error as e:
         print(f"Ошибка при удалении комнаты: {e}")
@@ -304,8 +814,10 @@ import json
 from datetime import datetime
 import math
 
+
 class Project:
     """Класс проекта (здания/объекта)"""
+
     def __init__(self, name):
         self.id = None
         self.name = name
@@ -331,14 +843,18 @@ class Project:
                          for room_data in data['rooms']]
         return project
 
+
 class Room:
     """Класс комнаты"""
+
     def __init__(self, name):
         self.id = None
         self.name = name
         self.created_at = datetime.now()
         self.walls = []  # Список стен в формате [[x1, y1, x2, y2], ...]
-        self.last_position = None # Добавлено для сохранения позиции в редакторе
+        self.last_position = None  # Последняя позиция курсора в редакторе
+        self.grid_offset_x = 0  # Сохранённое смещение сетки (критично!)
+        self.grid_offset_y = 0  # Сохранённое смещение сетки (критично!)
 
     def to_dict(self):
         """Конвертирует комнату в словарь"""
@@ -347,7 +863,9 @@ class Room:
             'name': self.name,
             'created_at': self.created_at.isoformat(),
             'walls': self.walls,
-            'last_position': self.last_position # Добавлено
+            'last_position': self.last_position,
+            'grid_offset_x': self.grid_offset_x,  # Новое поле
+            'grid_offset_y': self.grid_offset_y   # Новое поле
         }
 
     @classmethod
@@ -357,26 +875,29 @@ class Room:
         room.id = data['id']
         room.created_at = datetime.fromisoformat(data['created_at'])
         room.walls = data['walls']
-        room.last_position = data.get('last_position') # Добавлено
+        room.last_position = data.get('last_position')
+        room.grid_offset_x = data.get('grid_offset_x', 0)  # Новое поле
+        room.grid_offset_y = data.get('grid_offset_y', 0)  # Новое поле
         return room
 
-# --- Остальная часть models.py остается без изменений ---
-# (Класс CeilingLayout и его методы)
+
 class CeilingLayout:
     """Класс для расчета раскладки потолка 60×60 см"""
     TILE_SIZE = 60  # 60 см
 
     def __init__(self, room):
         self.room = room
-        self.grid_offset_x = 0  # Смещение сетки по X (0-59 см)
-        self.grid_offset_y = 0  # Смещение сетки по Y (0-59 см)
-        self.tiles = []  # Список плиток
+        self.grid_offset_x = room.grid_offset_x if hasattr(
+            room, 'grid_offset_x') else 0
+        self.grid_offset_y = room.grid_offset_y if hasattr(
+            room, 'grid_offset_y') else 0
+        self.tiles = []
         self.full_tiles = 0
         self.cut_tiles = 0
-        self.waste_percentage = 0 # Процент отходов
+        self.waste_percentage = 0
         self.room_polygon = self._build_room_polygon()
         self.room_bounds = self.get_room_bounds()
-        self.room_area_sqm = 0.0 # Новое поле для площади в м²
+        self.room_area_sqm = 0.0
 
     def _build_room_polygon(self):
         """Предварительно строит полигон комнаты один раз"""
@@ -386,8 +907,6 @@ class CeilingLayout:
         for wall in self.room.walls:
             points.append((wall[0], wall[1]))
             points.append((wall[2], wall[3]))
-
-        # Удаляем дубликаты и замыкаем полигон
         unique_points = []
         for point in points:
             if point not in unique_points:
@@ -397,8 +916,7 @@ class CeilingLayout:
         return unique_points
 
     def calculate_layout(self):
-        """Рассчитывает раскладку для текущего смещения с учетом реальной геометрии комнаты"""
-        # Сбрасываем статистику
+        """Рассчитывает раскладку для текущего смещения"""
         self.tiles = []
         self.full_tiles = 0
         self.cut_tiles = 0
@@ -406,8 +924,6 @@ class CeilingLayout:
             self.calculate_statistics()
             return
 
-        # 1. Находим ВСЕ возможные плитки в разумных пределах
-        # Используем расширенный bounding box для поиска всех потенциально пересекающихся плиток
         all_x = []
         all_y = []
         for wall in self.room.walls:
@@ -418,27 +934,22 @@ class CeilingLayout:
         min_x, max_x = min(all_x), max(all_x)
         min_y, max_y = min(all_y), max(all_y)
 
-        # Расширяем поиск на 60 см во все стороны
         search_min_x = min_x - 60
         search_max_x = max_x + 60
         search_min_y = min_y - 60
         search_max_y = max_y + 60
 
-        # 2. Определяем границы сетки
         grid_start_x = math.floor((search_min_x - self.grid_offset_x) /
                                   self.TILE_SIZE) * self.TILE_SIZE + self.grid_offset_x
         grid_start_y = math.floor((search_min_y - self.grid_offset_y) /
                                   self.TILE_SIZE) * self.TILE_SIZE + self.grid_offset_y
 
-        # 3. Проходим по всем возможным плиткам
         x = grid_start_x
         while x < search_max_x:
             y = grid_start_y
             while y < search_max_y:
                 tile_x2 = x + self.TILE_SIZE
                 tile_y2 = y + self.TILE_SIZE
-
-                # Анализируем плитку с учетом реальной геометрии
                 tile_info = self.analyze_tile(x, y, tile_x2, tile_y2)
                 if tile_info['type'] != 'outside':
                     self.tiles.append(tile_info)
@@ -449,31 +960,26 @@ class CeilingLayout:
                 y += self.TILE_SIZE
             x += self.TILE_SIZE
 
-        # 4. Рассчитываем статистику
         self.calculate_statistics()
 
     def analyze_tile(self, x1, y1, x2, y2):
         """Анализирует плитку с учетом реальной геометрии комнаты"""
-        # Сначала проверяем быстрый выход по bounding box
         room_min_x, room_max_x, room_min_y, room_max_y = self.get_room_bounds()
 
-        # Если плитка полностью вне bounding box комнаты
         if x2 <= room_min_x or x1 >= room_max_x or y2 <= room_min_y or y1 >= room_max_y:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
 
-        # Проверяем, полностью ли плитка внутри комнаты
         corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
         corners_inside = sum(
             1 for corner in corners if self.is_point_inside_room(*corner))
+
         if corners_inside == 4:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'full', 'cut_x': 60, 'cut_y': 60}
 
-        # Проверяем, полностью ли плитка снаружи (даже если пересекает bounding box)
         if corners_inside == 0:
-            # Дополнительная проверка центра и промежуточных точек
             test_points = [
-                ((x1 + x2) / 2, (y1 + y2) / 2),  # Центр
-                (x1 + 20, y1 + 20), (x2 - 20, y2 - 20),  # Дополнительные точки
+                ((x1 + x2) / 2, (y1 + y2) / 2),
+                (x1 + 20, y1 + 20), (x2 - 20, y2 - 20),
                 (x1 + 20, y2 - 20), (x2 - 20, y1 + 20)
             ]
             points_inside = sum(
@@ -481,10 +987,8 @@ class CeilingLayout:
             if points_inside == 0:
                 return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
 
-        # Рассчитываем полезные размеры для резаной плитки
         useful_x, useful_y = self.calculate_cut_dimensions(x1, y1, x2, y2)
 
-        # Если оба размера очень маленькие, считаем плитку снаружи
         if useful_x < 0.1 and useful_y < 0.1:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
 
@@ -503,11 +1007,15 @@ class CeilingLayout:
             x1, y1, x2, y2 = wall
             all_x.extend([x1, x2])
             all_y.extend([y1, y2])
+
+        # ← КРИТИЧНО: обработка пустой комнаты
+        if not all_x or not all_y:
+            return 0, 0, 0, 0
+
         return min(all_x), max(all_x), min(all_y), max(all_y)
 
     def calculate_cut_dimensions(self, x1, y1, x2, y2):
-        """Точный расчет полезных размеров плитки для любых форм комнат"""
-        # 1. Сначала собираем все координаты стен
+        """Точный расчет полезных размеров плитки"""
         all_x = []
         all_y = []
         for wall in self.room.walls:
@@ -518,13 +1026,11 @@ class CeilingLayout:
         if not all_x or not all_y:
             return 0.0, 0.0
 
-        # 2. Определяем границы комнаты
         room_min_x = min(all_x)
         room_max_x = max(all_x)
         room_min_y = min(all_y)
         room_max_y = max(all_y)
 
-        # 3. Определяем, является ли комната прямоугольной (4 стены с прямыми углами)
         is_rectangular = False
         if len(self.room.walls) == 4:
             corners = set()
@@ -536,78 +1042,50 @@ class CeilingLayout:
                 corner_y = sorted(set([p[1] for p in corners]))
                 if (len(corner_x) == 2 and len(corner_y) == 2 and
                     room_min_x in corner_x and room_max_x in corner_x and
-                    room_min_y in corner_y and room_max_y in corner_y):
+                        room_min_y in corner_y and room_max_y in corner_y):
                     is_rectangular = True
 
         if is_rectangular:
-            # Для прямоугольных комнат используем точный метод как в старой версии
             intersect_x1 = max(x1, room_min_x)
             intersect_y1 = max(y1, room_min_y)
             intersect_x2 = min(x2, room_max_x)
             intersect_y2 = min(y2, room_max_y)
-
             if intersect_x1 >= intersect_x2 or intersect_y1 >= intersect_y2:
                 return 0.0, 0.0
-
-            # Округляем до целых сантиметров для избежания неточностей
             useful_x = round(intersect_x2 - intersect_x1)
             useful_y = round(intersect_y2 - intersect_y1)
             return max(0.0, min(60.0, useful_x)), max(0.0, min(60.0, useful_y))
         else:
-            # === ОПТИМИЗИРОВАННЫЙ МЕТОД ДЛЯ СЛОЖНЫХ ФОРМ ===
-            # Сначала проверяем углы плитки
             corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
             corners_inside = [
                 p for p in corners if self.is_point_inside_room(*p)]
 
-            # Если все углы внутри - это не резаная плитка (должно обрабатываться выше)
             if len(corners_inside) == 4:
                 return 60.0, 60.0
 
-            # Если ни одного угла внутри, проверяем центр
             center = ((x1 + x2) / 2, (y1 + y2) / 2)
             if not corners_inside and not self.is_point_inside_room(*center):
                 return 0.0, 0.0
 
-            # 2. Находим пересечения с границами комнаты - ОСНОВНАЯ ОПТИМИЗАЦИЯ
             intersection_points = []
-
-            # Проверяем пересечение каждой стены комнаты с границами плитки
             for wall in self.room.walls:
                 wx1, wy1, wx2, wy2 = wall
-                # Проверяем пересечение с каждой стороной плитки
-                # Левая сторона плитки (x1, y1-y2)
-                inter = self.line_intersection(
-                    x1, y1, x1, y2, wx1, wy1, wx2, wy2)
-                if inter:
-                    intersection_points.append(inter)
-                # Правая сторона плитки (x2, y1-y2)
-                inter = self.line_intersection(
-                    x2, y1, x2, y2, wx1, wy1, wx2, wy2)
-                if inter:
-                    intersection_points.append(inter)
-                # Верхняя сторона плитки (x1-x2, y1)
-                inter = self.line_intersection(
-                    x1, y1, x2, y1, wx1, wy1, wx2, wy2)
-                if inter:
-                    intersection_points.append(inter)
-                # Нижняя сторона плитки (x1-x2, y2)
-                inter = self.line_intersection(
-                    x1, y2, x2, y2, wx1, wy1, wx2, wy2)
-                if inter:
-                    intersection_points.append(inter)
+                for line in [
+                    (x1, y1, x1, y2), (x2, y1, x2, y2),
+                    (x1, y1, x2, y1), (x1, y2, x2, y2)
+                ]:
+                    inter = self.line_intersection(*line, wx1, wy1, wx2, wy2)
+                    if inter:
+                        intersection_points.append(inter)
 
-            # 3. Собираем все точки, которые внутри комнаты
             inside_points = corners_inside.copy()
             if intersection_points:
-                # Добавляем точки пересечения
                 inside_points.extend(intersection_points)
             else:
-                # Если нет пересечений, проверяем несколько ключевых точек внутри плитки
                 key_points = [
                     (x1 + 20, y1 + 20), (x1 + 40, y1 + 20),
                     (x1 + 20, y1 + 40), (x1 + 40, y1 + 40),
-                    (x1 + 30, y1 + 30)  # центр
+                    (x1 + 30, y1 + 30)
                 ]
                 for px, py in key_points:
                     if self.is_point_inside_room(px, py):
@@ -616,114 +1094,58 @@ class CeilingLayout:
             if not inside_points:
                 return 0.0, 0.0
 
-            # 4. Находим реальные границы по всем найденным точкам
             min_x = min(p[0] for p in inside_points)
             max_x = max(p[0] for p in inside_points)
             min_y = min(p[1] for p in inside_points)
             max_y = max(p[1] for p in inside_points)
 
-            # 5. Дополнительно проверяем границы для точности в 1 см
-            # Проверяем вертикальные срезы с шагом 10 см для уточнения границ
-            for test_x in [x1 + 10, x1 + 20, x1 + 30, x1 + 40, x1 + 50]:
-                # Проверяем верхнюю и нижнюю точки на этой вертикали
-                if self.is_point_inside_room(test_x, y1 + 1) and test_x < max_x:
-                    min_x = min(min_x, test_x)
-                if self.is_point_inside_room(test_x, y2 - 1) and test_x > min_x:
-                    max_x = max(max_x, test_x)
-            # Проверяем горизонтальные срезы с шагом 10 см
-            for test_y in [y1 + 10, y1 + 20, y1 + 30, y1 + 40, y1 + 50]:
-                # Проверяем левую и правую точки на этой горизонтали
-                if self.is_point_inside_room(x1 + 1, test_y) and test_y < max_y:
-                    min_y = min(min_y, test_y)
-                if self.is_point_inside_room(x2 - 1, test_y) and test_y > min_y:
-                    max_y = max(max_y, test_y)
-
-            # 6. Вычисляем полезные размеры с точностью до 1 см
             useful_x = max(0.0, min(60.0, round(max_x - min_x)))
             useful_y = max(0.0, min(60.0, round(max_y - min_y)))
-
-            # Гарантируем минимальный размер 0.1 см для избежания деления на ноль
             return max(0.1, useful_x), max(0.1, useful_y)
 
     def line_intersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
-        """Находит точку пересечения двух отрезков или возвращает None"""
-        # Проверяем, не являются ли линии параллельными
+        """Находит точку пересечения двух отрезков"""
         denom = (y4-y3)*(x2-x1) - (x4-x3)*(y2-y1)
-        if abs(denom) < 0.001:  # почти параллельны
+        if abs(denom) < 0.001:
             return None
-
         ua = ((x4-x3)*(y1-y3) - (y4-y3)*(x1-x3)) / denom
         ub = ((x2-x1)*(y1-y3) - (y2-y1)*(x1-x3)) / denom
-
-        # Проверяем, пересекаются ли отрезки
         if ua < 0 or ua > 1 or ub < 0 or ub > 1:
             return None
-
-        # Вычисляем точку пересечения
         x = x1 + ua * (x2-x1)
         y = y1 + ua * (y2-y1)
-
-        # Проверяем, находится ли точка в пределах обоих отрезков
         if (min(x1, x2) - 1 <= x <= max(x1, x2) + 1 and
             min(y1, y2) - 1 <= y <= max(y1, y2) + 1 and
             min(x3, x4) - 1 <= x <= max(x3, x4) + 1 and
-            min(y3, y4) - 1 <= y <= max(y3, y4) + 1):
+                min(y3, y4) - 1 <= y <= max(y3, y4) + 1):
             return (x, y)
         return None
 
     def point_to_line_distance(self, px, py, x1, y1, x2, y2):
         """Вычисляет расстояние от точки до линии"""
-        # Если линия вырождена в точку
         if x1 == x2 and y1 == y2:
             return math.sqrt((px - x1)**2 + (py - y1)**2)
-
-        # Вектор линии
         line_vec_x = x2 - x1
         line_vec_y = y2 - y1
-        # Вектор от начала линии до точки
         point_vec_x = px - x1
         point_vec_y = py - y1
-        # Длина линии
         line_len = math.sqrt(line_vec_x**2 + line_vec_y**2)
-        # Единичный вектор линии
         if line_len > 0:
             line_vec_x /= line_len
             line_vec_y /= line_len
-        # Проекция вектора точки на линию
         projection_length = point_vec_x * line_vec_x + point_vec_y * line_vec_y
-        # Ограничиваем проекцию длиной линии
         projection_length = max(0, min(line_len, projection_length))
-        # Ближайшая точка на линии
         closest_x = x1 + projection_length * line_vec_x
         closest_y = y1 + projection_length * line_vec_y
-        # Расстояние от точки до ближайшей точки на линии
         return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
-    def is_point_on_wall(self, px, py, tolerance=0.5):
-        """Проверяет, лежит ли точка на какой-либо стене комнаты"""
-        for wall in self.room.walls:
-            x1, y1, x2, y2 = wall
-            distance = self.point_to_line_distance(px, py, x1, y1, x2, y2)
-            if distance < tolerance:
-                # Проверяем, попадает ли точка в пределы отрезка
-                min_x, max_x = min(x1, x2), max(x1, x2)
-                min_y, max_y = min(y1, y2), max(y1, y2)
-                if (min_x - tolerance <= px <= max_x + tolerance and
-                    min_y - tolerance <= py <= max_y + tolerance):
-                    return True
-        return False
-
     def is_point_inside_room(self, px, py):
-        """Оптимизированная проверка с использованием кэшированного полигона"""
+        """Проверка точки внутри комнаты (ray casting)"""
         if not self.room_polygon:
             return False
-
-        # Быстрая проверка по bounding box
         min_x, max_x, min_y, max_y = self.room_bounds
         if px < min_x - 1 or px > max_x + 1 or py < min_y - 1 or py > max_y + 1:
             return False
-
-        # Алгоритм ray casting с кэшированным полигоном
         inside = False
         j = len(self.room_polygon) - 1
         for i in range(len(self.room_polygon)):
@@ -736,6 +1158,7 @@ class CeilingLayout:
 
     def calculate_room_area(self):
         """Точный расчет площади комнаты методом триангуляции для сложных форм"""
+        # ← КРИТИЧНО: обработка пустой комнаты
         if not self.room.walls or len(self.room.walls) < 3:
             return 0
 
@@ -745,34 +1168,39 @@ class CeilingLayout:
             points.append((self.room.walls[0][0], self.room.walls[0][1]))
             for wall in self.room.walls:
                 points.append((wall[2], wall[3]))
+
         # Замыкаем полигон
         if points[0] != points[-1]:
             points.append(points[0])
 
         # Метод Гаусса для расчета площади полигона
         area = 0
-        n = len(points) - 1  # Последняя точка совпадает с первой
+        n = len(points) - 1
         for i in range(n):
             x1, y1 = points[i]
             x2, y2 = points[i + 1]
             area += x1 * y2 - x2 * y1
+
         return abs(area) / 2
 
     def calculate_statistics(self):
-        """Рассчитывает статистику раскладки с правильным учетом площади комнаты"""
+        """Рассчитывает статистику раскладки"""
         if not self.room.walls:
             self.waste_percentage = 0
             self.room_area_sqm = 0.0
             return
-
         # 1. Точно считаем площадь комнаты в см²
         room_area_sqcm = self.calculate_room_area()
-        # 2. Конвертируем площадь в м²
-        self.room_area_sqm = room_area_sqcm / 10000.0 # 1 м² = 10000 см²
 
-        # 3. Площадь целых плиток
+        # ← КРИТИЧНО: проверка на нулевую площадь
+        if room_area_sqcm <= 0:
+            self.room_area_sqm = 0.0
+            self.waste_percentage = 0
+            return
+        # 2. Конвертируем площадь в м²
+        self.room_area_sqm = room_area_sqcm / 10000.0
+
         full_area = self.full_tiles * (self.TILE_SIZE * self.TILE_SIZE)
-        # 4. Площадь полезной части резаных плиток
         cut_area_total = 0
         for tile in self.tiles:
             if tile['type'] == 'cut':
@@ -780,16 +1208,11 @@ class CeilingLayout:
                 useful_y = tile.get('cut_y', 0)
                 useful_area = useful_x * useful_y
                 cut_area_total += useful_area
-
-        # 5. Общая полезная площадь
         useful_area_total = full_area + cut_area_total
-        # 6. Общая площадь всех плиток (включая отходы)
         total_tiles_area = (self.full_tiles + self.cut_tiles) * \
-                           (self.TILE_SIZE * self.TILE_SIZE)
-        # 7. Отходы = вся площадь плиток - полезная площадь
+            (self.TILE_SIZE * self.TILE_SIZE)
         waste_area = total_tiles_area - useful_area_total
-        # 8. Процент отходов относительно площади комнаты
-        if room_area_sqcm > 0: # Проверка деления на ноль
+        if room_area_sqcm > 0:
             waste_percent = (waste_area / room_area_sqcm) * 100
             self.waste_percentage = round(waste_percent, 1)
         else:
@@ -800,6 +1223,126 @@ class CeilingLayout:
         self.grid_offset_x = (self.grid_offset_x + dx) % self.TILE_SIZE
         self.grid_offset_y = (self.grid_offset_y + dy) % self.TILE_SIZE
         self.calculate_layout()
+
+============================================================
+ФАЙЛ: repo_to_text.py
+============================================================
+
+import os
+import mimetypes
+from pathlib import Path
+
+
+def is_binary_file(file_path, sample_size=1024):
+    """Проверяет, является ли файл бинарным."""
+    try:
+        with open(file_path, 'rb') as f:
+            sample = f.read(sample_size)
+            if b'\0' in sample:  # Простая эвристика: если есть нулевые байты — скорее всего бинарник
+                return True
+            # Дополнительно: попробуем декодировать как UTF-8
+            try:
+                sample.decode('utf-8')
+                return False
+            except UnicodeDecodeError:
+                return True
+    except Exception:
+        return True  # Если не удалось прочитать — считаем бинарным
+
+
+def should_skip_dir(dir_name):
+    """Возвращает True, если директорию нужно пропустить."""
+    skip_dirs = {
+        '.git', '__pycache__', 'node_modules', 'venv', 'env', '.venv',
+        '.idea', '.vscode', '.DS_Store', 'dist', 'build', 'coverage',
+        '.pytest_cache', '.mypy_cache', '.tox', '.eggs', '*.egg-info',
+        'api_service'
+    }
+    return dir_name in skip_dirs or dir_name.endswith('.egg-info')
+
+
+def should_skip_file(file_name):
+    """Возвращает True, если файл нужно пропустить."""
+    skip_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.exe', '.dll', '.so', '.dylib',
+                       '.zip', '.tar', '.gz', '.rar', '.pdf', '.bin', '.dat', '.log', '.lock', '.txt'}
+    ext = Path(file_name).suffix.lower()
+    return ext in skip_extensions
+
+
+def generate_repo_summary(repo_path, output_file="repo_summary.txt"):
+    repo_path = Path(repo_path).resolve()
+    if not repo_path.exists():
+        raise ValueError(f"Путь не существует: {repo_path}")
+
+    with open(output_file, "w", encoding="utf-8") as out_f:
+        out_f.write(f"РЕПОЗИТОРИЙ: {repo_path}\n")
+        out_f.write("=" * 80 + "\n\n")
+
+        # Сначала соберём дерево структуры
+        tree_lines = []
+        file_list = []
+
+        for root, dirs, files in os.walk(repo_path):
+            # Пропускаем ненужные директории
+            dirs[:] = [d for d in dirs if not should_skip_dir(d)]
+
+            level = root.replace(str(repo_path), '').count(os.sep)
+            indent = '│   ' * (level - 1) + '├── ' if level > 0 else ''
+            tree_lines.append(f"{indent}{os.path.basename(root)}/")
+
+            for file in sorted(files):
+                if should_skip_file(file):
+                    continue
+                file_path = Path(root) / file
+                rel_path = file_path.relative_to(repo_path)
+                file_list.append(file_path)
+
+                file_indent = '│   ' * level + '├── '
+                tree_lines.append(f"{file_indent}{file}")
+
+        # Записываем дерево
+        out_f.write("СТРУКТУРА ПРОЕКТА:\n")
+        out_f.write("-" * 40 + "\n")
+        for line in tree_lines:
+            out_f.write(line + "\n")
+        out_f.write("\n" + "=" * 80 + "\n\n")
+
+        # Теперь записываем содержимое каждого файла
+        for file_path in sorted(file_list):
+            rel_path = file_path.relative_to(repo_path)
+            try:
+                if is_binary_file(file_path):
+                    continue
+
+                out_f.write(f"\n{'='*60}\n")
+                out_f.write(f"ФАЙЛ: {rel_path}\n")
+                out_f.write(f"{'='*60}\n\n")
+
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    out_f.write(content)
+                    if not content.endswith('\n'):
+                        out_f.write('\n')
+
+            except Exception as e:
+                out_f.write(f"\n[ОШИБКА ПРИ ЧТЕНИИ ФАЙЛА: {e}]\n")
+
+    print(f"✅ Готово! Сводка сохранена в: {output_file}")
+
+
+# === ОСНОВНОЙ ЗАПУСК ===
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Использование: python repo_to_text.py <путь_к_репозиторию> [выходной_файл.txt]")
+        repo_path = input("Введите путь к репозиторию: ").strip()
+    else:
+        repo_path = sys.argv[1]
+
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "repo_summary.txt"
+
+    generate_repo_summary(repo_path, output_file)
 
 
 ============================================================
@@ -831,7 +1374,7 @@ class LayoutScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.snap_mode = 0
-        self.control_mode = 'grid'  # 'grid' или 'pan_zoom'
+        self.control_mode = 'grid'
 
         main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
         self.selected_corner = None
@@ -839,21 +1382,26 @@ class LayoutScreen(Screen):
         # Панель инструментов
         toolbar = self.create_toolbar()
 
-        # Область с раскладкой
-        self.layout_widget = LayoutWidget(size_hint=(1, 0.8))
+        # ← КРИТИЧНО: Область с раскладкой с фиксированным size_hint
+        self.layout_widget = LayoutWidget(size_hint=(1, 1))
 
-        # Панель информации и управления
+        # Панель управления
         control_panel = self.create_control_panel()
 
-        # Панель статистики (обновленная)
+        # Панель статистики
         stats_panel = self.create_stats_panel()
 
+        # ← КРИТИЧНО: Собираем в правильный порядок
         main_layout.add_widget(toolbar)
         main_layout.add_widget(self.layout_widget)
         main_layout.add_widget(control_panel)
         main_layout.add_widget(stats_panel)
 
-        self.add_widget(main_layout)
+        # ← КРИТИЧНО: Оборачиваем в FloatLayout для правильного z-ordering
+        from kivy.uix.floatlayout import FloatLayout
+        overlay = FloatLayout()
+        overlay.add_widget(main_layout)
+        self.add_widget(overlay)
 
     def toggle_dimensions(self, instance):
         """Переключает отображение размеров резаных плиток"""
@@ -888,25 +1436,33 @@ class LayoutScreen(Screen):
         if current_room:
             print(f"Загрузка комнаты: {current_room.name}")
             print(f"Стены: {len(current_room.walls)}")
-            # Отладочная информация о стенах
-            for i, wall in enumerate(current_room.walls):
-                print(f"  Стена {i}: {wall}")
 
             # Устанавливаем стены в виджет
             self.layout_widget.set_room(current_room.walls)
+
             # Создаем расчет раскладки
             self.ceiling_layout = CeilingLayout(current_room)
-            # ВАЖНО: Устанавливаем начальное смещение сетки в 0, а не берем из виджета
-            self.ceiling_layout.grid_offset_x = 0
-            self.ceiling_layout.grid_offset_y = 0
+
+            # ← КРИТИЧНО: загружаем сохранённое смещение из комнаты
+            self.ceiling_layout.grid_offset_x = getattr(
+                current_room, 'grid_offset_x', 0)
+            self.ceiling_layout.grid_offset_y = getattr(
+                current_room, 'grid_offset_y', 0)
+            self.layout_widget.grid_offset_x = self.ceiling_layout.grid_offset_x
+            self.layout_widget.grid_offset_y = self.ceiling_layout.grid_offset_y
+
             # Рассчитываем раскладку
             self.ceiling_layout.calculate_layout()
+
             # Передаем layout в виджет
             self.layout_widget.layout = self.ceiling_layout
+
             # Устанавливаем callback для обновления статистики при движении сетки
             self.layout_widget.on_grid_move = self.on_grid_moved
+
             # Обновляем статистику
             self.update_stats()
+
             # Явно перерисовываем
             self.layout_widget.draw_layout()
 
@@ -1159,9 +1715,33 @@ class LayoutScreen(Screen):
 
     def go_back(self, instance):
         """Возврат в редактор"""
-        # Сохраняем проект при выходе с экрана раскладки (если нужно)
-        # save_project(self.manager.current_project)
+        # Сохраняем текущее смещение сетки в комнату
+        if hasattr(self, 'ceiling_layout') and self.manager.current_room:
+            self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
+            self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
+            from database import save_project
+            save_project(self.manager.current_project)
+
+        # ← Возвращаемся всегда в редактор
         self.manager.current = 'room_editor'
+
+    # def go_back(self, instance):
+    #     """Возврат — пропускаем редактор если комната имеет стены"""
+    #     # Сохраняем текущее смещение сетки в комнату
+    #     if hasattr(self, 'ceiling_layout') and self.manager.current_room:
+    #         self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
+    #         self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
+    #         from database import save_project
+    #         save_project(self.manager.current_project)
+
+    #     # ← КРИТИЧНО: Проверяем есть ли стены у комнаты
+    #     current_room = self.manager.current_room
+    #     if current_room and current_room.walls and len(current_room.walls) >= 3:
+    #         # Если комната имеет стены — идем сразу в комнаты
+    #         self.manager.current = 'rooms'
+    #     else:
+    #         # Иначе — в редактор
+    #         self.manager.current = 'room_editor'
 
 ============================================================
 ФАЙЛ: screens\main_screen.py
@@ -1379,20 +1959,20 @@ class ProjectsScreen(Screen):
     def update_projects_grid(self):
         """Обновляет сетку проектов"""
         self.projects_container.clear_widgets()
-        
+
         # Устанавливаем параметры сетки
         self.projects_container.cols = 2
         self.projects_container.spacing = dp(10)
         self.projects_container.padding = dp(10)
-        
+
         # Добавляем плитки проектов
         for project in self.projects:
             project_tile = self.create_project_tile(project)
             self.projects_container.add_widget(project_tile)
-        
+
         # Автоматически устанавливаем высоту контейнера на основе содержимого
         self.projects_container.height = self.projects_container.minimum_height
-        
+
         # Если проектов нет
         if not self.projects:
             empty_label = Label(
@@ -1410,39 +1990,60 @@ class ProjectsScreen(Screen):
 
     def create_project_tile(self, project):
         """Создает плитку для проекта с кнопкой удаления"""
-        # Вычисляем ширину плитки
         container_width = self.projects_container.width if self.projects_container.width > 0 else self.width
-        tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        
-        # Используем RelativeLayout для точного позиционирования элементов
+        tile_width = (container_width - dp(30)) / \
+            2 if container_width > 0 else dp(150)
+
         tile_layout = RelativeLayout(
             size_hint=(None, None),
             size=(tile_width, tile_width)
         )
-        
-        # Основная плитка - кнопка с фоном
+
+        # Расчет общей площади
+        from database import load_project
+        from models import CeilingLayout
+        total_area = 0.0
+
+        full_project = load_project(project.id) if project.id else None
+        if full_project:
+            for room in full_project.rooms:
+                try:
+                    if room.walls and len(room.walls) >= 3:
+                        temp_layout = CeilingLayout(room)
+                        total_area += temp_layout.room_area_sqm if hasattr(
+                            temp_layout, 'room_area_sqm') else 0.0
+                except Exception as e:
+                    print(f"Ошибка расчета площади: {e}")
+                    continue
+
+        # ← КРИТИЧНО: правильное форматирование текста
+        if total_area > 0:
+            button_text = f"{project.name}\n{total_area:.1f} м²"
+        else:
+            button_text = project.name
+
         tile_button = Button(
             background_color=(0.95, 0.95, 0.95, 1),
             background_normal='',
-            text=project.name,
+            text=button_text,
             font_size=dp(16),
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), None),
-            shorten=True,
+            text_size=(tile_width - dp(20), tile_width -
+                       dp(20)),  # ← Оба размера!
+            shorten=False,  # ← Отключаем сокращение
             max_lines=2
         )
-        tile_button.bind(size=tile_button.setter('text_size'))
-        tile_button.bind(on_press=lambda instance, p=project: self.open_project(p))
-        
-        # Контейнер для кнопки удаления (точно в правом верхнем углу)
+        tile_button.bind(on_press=lambda instance,
+                         p=project: self.open_project(p))
+
+        # Кнопка удаления
         delete_container = BoxLayout(
             size_hint=(None, None),
             size=(dp(25), dp(25)),
-            pos_hint={'right': 1, 'top': 1}  # Позиционируем в правом верхнем углу
+            pos_hint={'right': 1, 'top': 1}
         )
-        
         delete_button = Button(
             text='X',
             font_size=dp(12),
@@ -1452,19 +2053,18 @@ class ProjectsScreen(Screen):
             halign='center',
             valign='middle'
         )
-        delete_button.bind(on_press=lambda instance, p_id=project.id: self.confirm_delete_project(p_id))
-        
+        delete_button.bind(on_press=lambda instance,
+                           p_id=project.id: self.confirm_delete_project(p_id))
         delete_container.add_widget(delete_button)
-        
-        # Добавляем элементы в RelativeLayout
-        tile_layout.add_widget(tile_button)  # Основная кнопка снизу
-        tile_layout.add_widget(delete_container)  # Кнопка удаления поверх
-        
+
+        tile_layout.add_widget(tile_button)
+        tile_layout.add_widget(delete_container)
         return tile_layout
-    
+
     def confirm_delete_project(self, project_id):
         """Показывает диалог подтверждения удаления проекта."""
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+        content = BoxLayout(orientation='vertical',
+                            spacing=dp(10), padding=dp(10))
         message = Label(text='Вы точно хотите удалить?', font_size=dp(16))
 
         btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.3))
@@ -1479,7 +2079,8 @@ class ProjectsScreen(Screen):
         def cancel_delete(dt):
             popup.dismiss()
 
-        btn_delete = Button(text='Удалить', background_color=(0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
+        btn_delete = Button(text='Удалить', background_color=(
+            0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
         btn_cancel = Button(text='Отмена')
 
         btn_delete.bind(on_press=do_delete)
@@ -1557,6 +2158,232 @@ class ProjectsScreen(Screen):
     def go_back(self, instance):
         """Возврат на главный экран"""
         self.manager.current = 'main'
+
+============================================================
+ФАЙЛ: screens\room_editor.py
+============================================================
+
+# screens/room_editor.py
+from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
+from kivy.metrics import dp
+from kivy.uix.floatlayout import FloatLayout
+from widgets.grid_widget import GridWidget
+from database import save_project
+
+
+class RoomEditorScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Основной контейнер
+        main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
+
+        # Панель инструментов (8% высоты)
+        toolbar = self.create_toolbar()
+
+        # Область рисования (занимает всё доступное место)
+        self.grid_widget = GridWidget(size_hint=(1, 1))
+        self.grid_widget.scale = 0.5
+
+        # Панель информации (7% высоты)
+        info_panel = self.create_info_panel()
+
+        # Собираем основной layout
+        main_layout.add_widget(toolbar)
+        main_layout.add_widget(self.grid_widget)
+        main_layout.add_widget(info_panel)
+
+        # Контейнер для масштабирования (поверх основного)
+        scale_panel = self.create_scale_panel()
+
+        # FloatLayout для наложения scale_panel поверх
+        overlay = FloatLayout()
+        overlay.add_widget(main_layout)
+        overlay.add_widget(scale_panel)
+
+        self.add_widget(overlay)
+        self.update_info()
+
+    def on_pre_enter(self):
+        """Вызывается перед входом на экран - загружаем комнату"""
+        current_room = self.manager.current_room
+        if current_room:
+            self.grid_widget.walls = current_room.walls.copy()
+            if current_room.walls:
+                last_wall = current_room.walls[-1]
+                self.grid_widget.current_pos_cm = [last_wall[2], last_wall[3]]
+                if hasattr(current_room, 'last_position') and current_room.last_position:
+                    self.grid_widget.current_pos_cm = current_room.last_position
+            else:
+                self.grid_widget.current_pos_cm = [0, 0]
+            self.grid_widget.canvas.clear()
+            self.grid_widget.draw_editor()
+            self.update_info()
+
+    def create_toolbar(self):
+        toolbar = BoxLayout(size_hint=(1, 0.08), spacing=dp(5), padding=dp(5))
+        self.arrows_container = BoxLayout(size_hint=(0.4, 1))
+        self.create_arrow_buttons()
+        undo_redo_container = BoxLayout(
+            orientation='vertical', size_hint=(0.2, 1), spacing=dp(2))
+        self.btn_undo = Button(text='Назад', font_size=dp(
+            14), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
+        self.btn_undo.bind(on_press=self.undo_action)
+        self.btn_redo = Button(text='Вперед', font_size=dp(
+            14), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
+        self.btn_redo.bind(on_press=self.redo_action)
+        undo_redo_container.add_widget(self.btn_undo)
+        undo_redo_container.add_widget(self.btn_redo)
+        actions_container = BoxLayout(
+            orientation='vertical', size_hint=(0.4, 1), spacing=dp(2))
+        btn_layout = Button(
+            text='Раскладка', font_size=dp(14), size_hint=(1, 0.5))
+        btn_layout.bind(on_press=self.show_layout)
+        btn_exit = Button(text='Выход', font_size=dp(14), size_hint=(1, 0.5))
+        btn_exit.bind(on_press=self.exit_editor)
+        actions_container.add_widget(btn_layout)
+        actions_container.add_widget(btn_exit)
+        toolbar.add_widget(self.arrows_container)
+        toolbar.add_widget(undo_redo_container)
+        toolbar.add_widget(actions_container)
+        return toolbar
+
+    def create_scale_panel(self):
+        scale_panel = BoxLayout(orientation='vertical', size_hint=(None, None), size=(
+            dp(60), dp(120)), pos_hint={'right': 1, 'top': 0.85}, spacing=dp(5), padding=dp(5))
+        btn_zoom_in = Button(text='+', font_size=dp(24), size_hint=(1, 0.5))
+        btn_zoom_in.bind(on_press=self.zoom_in)
+        btn_zoom_out = Button(text='-', font_size=dp(24), size_hint=(1, 0.5))
+        btn_zoom_out.bind(on_press=self.zoom_out)
+        scale_panel.add_widget(btn_zoom_in)
+        scale_panel.add_widget(btn_zoom_out)
+        return scale_panel
+
+    def create_info_panel(self):
+        info_panel = BoxLayout(size_hint=(1, 0.07), padding=dp(10))
+        self.info_label = Label(
+            text='Точка: (0, 0) см | Стены: 0 | Площадь: —',
+            font_size=dp(12),
+            color=(0, 0, 0, 1)
+        )
+        info_panel.add_widget(self.info_label)
+        return info_panel
+
+    def create_arrow_buttons(self):
+        grid = GridLayout(cols=3, rows=3, spacing=dp(2))
+        arrows = [
+            ('↖', 'up_left'), ('^', 'up'), ('↗', 'up_right'),
+            ('<-', 'left'), ('•', 'center'), ('->', 'right'),
+            ('↙', 'down_left'), ('v', 'down'), ('↘', 'down_right')
+        ]
+        for symbol, direction in arrows:
+            if direction == 'center':
+                btn = Button(text=symbol, font_size=dp(
+                    20), background_color=(0.8, 0.8, 0.8, 1), disabled=True)
+            else:
+                btn = Button(text=symbol, font_size=dp(
+                    20), on_press=lambda instance, d=direction: self.start_add_wall(d))
+            grid.add_widget(btn)
+        self.arrows_container.clear_widgets()
+        self.arrows_container.add_widget(grid)
+
+    def start_add_wall(self, direction):
+        content = BoxLayout(orientation='vertical',
+                            spacing=dp(10), padding=dp(10))
+        label = Label(text=f"Длина стены (см) в направлении {direction}:")
+        length_input = TextInput(
+            multiline=False, input_filter='int', text='100')
+        btn_layout = BoxLayout(spacing=dp(10))
+        btn_confirm = Button(text='Подтвердить')
+        btn_cancel = Button(text='Отмена')
+
+        def confirm(instance):
+            try:
+                length = int(length_input.text)
+                if length > 0:
+                    self.grid_widget.add_wall(direction, length)
+                    self.update_info()
+                    popup.dismiss()
+            except ValueError:
+                pass
+        btn_confirm.bind(on_press=confirm)
+        btn_cancel.bind(on_press=lambda x: popup.dismiss())
+        btn_layout.add_widget(btn_cancel)
+        btn_layout.add_widget(btn_confirm)
+        content.add_widget(label)
+        content.add_widget(length_input)
+        content.add_widget(btn_layout)
+        popup = Popup(title='Ввод длины стены',
+                      content=content, size_hint=(0.8, 0.3))
+        popup.open()
+
+    def update_info(self):
+        """Обновляет информационную панель с площадью"""
+        x, y = self.grid_widget.current_pos_cm
+        walls_count = len(self.grid_widget.walls)
+
+        # Расчет площади только если комната замкнута (3+ стены)
+        room_area = 0.0
+        if walls_count >= 3:
+            try:
+                from models import CeilingLayout, Room
+                temp_room = Room("temp")
+                temp_room.walls = self.grid_widget.walls.copy()
+                temp_layout = CeilingLayout(temp_room)
+                room_area = temp_layout.room_area_sqm if hasattr(
+                    temp_layout, 'room_area_sqm') else 0.0
+            except Exception as e:
+                print(f"Ошибка расчета площади: {e}")
+                room_area = 0.0
+
+        if room_area > 0:
+            self.info_label.text = f'Точка: ({int(x)}, {int(y)}) см | Стены: {walls_count} | Площадь: {room_area:.1f} м²'
+        else:
+            self.info_label.text = f'Точка: ({int(x)}, {int(y)}) см | Стены: {walls_count} | Площадь: —'
+
+    def undo_action(self, instance):
+        if self.grid_widget.undo():
+            self.update_info()
+            self.btn_redo.disabled = False
+            self.btn_redo.background_color = (0.2, 0.6, 1, 1)
+
+    def redo_action(self, instance):
+        if self.grid_widget.redo():
+            self.update_info()
+
+    def zoom_in(self, instance):
+        self.grid_widget.scale = min(1.0, self.grid_widget.scale + 0.1)
+        self.grid_widget.canvas.clear()
+        self.grid_widget.draw_editor()
+        self.update_info()
+
+    def zoom_out(self, instance):
+        self.grid_widget.scale = max(0.1, self.grid_widget.scale - 0.1)
+        self.grid_widget.canvas.clear()
+        self.grid_widget.draw_editor()
+        self.update_info()
+
+    def show_layout(self, instance):
+        current_room = self.manager.current_room
+        if current_room:
+            current_room.walls = self.grid_widget.walls.copy()
+            current_room.last_position = self.grid_widget.current_pos_cm.copy()
+            save_project(self.manager.current_project)
+        self.manager.current = 'layout'
+
+    def exit_editor(self, instance):
+        current_room = self.manager.current_room
+        if current_room:
+            current_room.walls = self.grid_widget.walls.copy()
+            current_room.last_position = self.grid_widget.current_pos_cm.copy()
+            save_project(self.manager.current_project)
+        self.manager.current = 'rooms'
 
 ============================================================
 ФАЙЛ: screens\rooms_screen.py
@@ -1692,13 +2519,31 @@ class RoomsScreen(Screen):
         project = self.manager.current_project
         
         if project:
-            self.title_label.text = f'Комнаты:\n{project.name}'
-            self.title_label.font_size = dp(16)
+            # Расчет общей площади для тулбара
+            from models import CeilingLayout
+            total_area = 0.0
+            for room in project.rooms:
+                try:
+                    if room.walls and len(room.walls) >= 3:
+                        temp_layout = CeilingLayout(room)
+                        total_area += temp_layout.room_area_sqm if hasattr(temp_layout, 'room_area_sqm') else 0.0
+                except Exception as e:
+                    print(f"Ошибка расчета площади: {e}")
+                    continue
+            
+            # ← КРИТИЧНО: правильное форматирование заголовка
+            if total_area > 0:
+                self.title_label.text = f'Комнаты:\n{project.name}\n{total_area:.1f} м²'
+            else:
+                self.title_label.text = f'Комнаты:\n{project.name}'
+            
+            self.title_label.font_size = dp(14)
             self.title_label.halign = 'center'
             self.title_label.valign = 'middle'
-            self.title_label.max_lines = 2
+            self.title_label.max_lines = 3
+            self.title_label.text_size = (self.title_label.width, self.title_label.height * 3)
             
-            # Устанавливаем параметры сетки
+            # Параметры сетки
             self.rooms_container.cols = 2
             self.rooms_container.spacing = dp(10)
             self.rooms_container.padding = dp(10)
@@ -1708,59 +2553,70 @@ class RoomsScreen(Screen):
                 room_tile = self.create_room_tile(room)
                 self.rooms_container.add_widget(room_tile)
             
-            # Автоматически устанавливаем высоту контейнера на основе содержимого
             self.rooms_container.height = self.rooms_container.minimum_height
-        
-        # Если комнат нет
-        if not project or not project.rooms:
-            empty_label = Label(
-                text='Нет комнат\nНажмите "+ Новая комната"',
-                font_size=dp(16),
-                color=(0.5, 0.5, 0.5, 1),
-                halign='center',
-                valign='middle',
-                size_hint_y=None
-            )
-            empty_label.bind(size=empty_label.setter('text_size'))
-            empty_label.height = self.height * 0.3
-            self.rooms_container.add_widget(empty_label)
-            self.rooms_container.height = self.rooms_container.minimum_height
+            
+            # Если комнат нет
+            if not project.rooms:
+                empty_label = Label(
+                    text='Нет комнат\nНажмите "+ Новая комната"',
+                    font_size=dp(16),
+                    color=(0.5, 0.5, 0.5, 1),
+                    halign='center',
+                    valign='middle',
+                    size_hint_y=None
+                )
+                empty_label.bind(size=empty_label.setter('text_size'))
+                empty_label.height = self.height * 0.3
+                self.rooms_container.add_widget(empty_label)
+                self.rooms_container.height = self.rooms_container.minimum_height
 
     def create_room_tile(self, room):
         """Создает плитку для комнаты с кнопкой удаления"""
-        # Вычисляем ширину плитки
         container_width = self.rooms_container.width if self.rooms_container.width > 0 else self.width
         tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
         
-        # Используем RelativeLayout для точного позиционирования
         tile_layout = RelativeLayout(
             size_hint=(None, None),
             size=(tile_width, tile_width)
         )
         
-        # Основная плитка - кнопка с фоном
+        # ← КРИТИЧНО: безопасный расчет площади комнаты
+        from models import CeilingLayout
+        room_area = 0.0
+        if room.walls and len(room.walls) >= 3:
+            try:
+                temp_layout = CeilingLayout(room)
+                room_area = temp_layout.room_area_sqm if hasattr(temp_layout, 'room_area_sqm') else 0.0
+            except Exception as e:
+                print(f"Ошибка расчета площади: {e}")
+                room_area = 0.0
+        
+        # ← КРИТИЧНО: правильное форматирование текста
+        if room_area > 0:
+            button_text = f"{room.name}\n{room_area:.1f} м²"
+        else:
+            button_text = room.name
+        
         tile_button = Button(
             background_color=(0.95, 0.95, 0.95, 1),
             background_normal='',
-            text=room.name,
+            text=button_text,
             font_size=dp(16),
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), None),
-            shorten=True,
+            text_size=(tile_width - dp(20), tile_width - dp(20)),  # ← Оба размера!
+            shorten=False,
             max_lines=2
         )
-        tile_button.bind(size=tile_button.setter('text_size'))
         tile_button.bind(on_press=lambda instance, r=room: self.open_room_editor(r))
         
-        # Контейнер для кнопки удаления (точно в правом верхнем углу)
+        # Кнопка удаления
         delete_container = BoxLayout(
             size_hint=(None, None),
             size=(dp(25), dp(25)),
             pos_hint={'right': 1, 'top': 1}
         )
-        
         delete_button = Button(
             text='X',
             font_size=dp(12),
@@ -1771,13 +2627,20 @@ class RoomsScreen(Screen):
             valign='middle'
         )
         delete_button.bind(on_press=lambda instance, r_id=room.id: self.confirm_delete_room(r_id))
-        
         delete_container.add_widget(delete_button)
         
         tile_layout.add_widget(tile_button)
         tile_layout.add_widget(delete_container)
-        
         return tile_layout
+
+    def open_room_editor(self, room):
+        """Открывает редактор комнаты"""
+        self.manager.current_room = room
+        # ← КРИТИЧНО: если комната уже имеет стены, пропускаем редактор
+        if room.walls and len(room.walls) >= 3:
+            self.manager.current = 'layout'
+        else:
+            self.manager.current = 'room_editor'
 
     def confirm_delete_room(self, room_id):
         """Показывает диалог подтверждения удаления комнаты."""
@@ -1798,19 +2661,22 @@ class RoomsScreen(Screen):
                 self.manager.current_project.rooms.remove(room_to_remove)
                 # Сохраняем проект (это удалит комнату из БД)
                 save_project(self.manager.current_project)
-                
+
                 # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД для актуализации данных
                 if self.manager.current_project.id:
-                    updated_project = load_project(self.manager.current_project.id)
+                    updated_project = load_project(
+                        self.manager.current_project.id)
                     if updated_project:
                         self.manager.current_project = updated_project
-                
-                print(f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
+
+                print(
+                    f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
                 # Обновляем сетку
                 self.update_rooms_grid()
                 popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
             else:
-                print(f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
+                print(
+                    f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
                 popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
 
         def cancel_delete(dt):
@@ -1864,13 +2730,14 @@ class RoomsScreen(Screen):
                 self.manager.current_project.rooms.append(room)
                 # Сохраняем проект в БД после добавления комнаты
                 save_project(self.manager.current_project)
-                
+
                 # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД, чтобы получить актуальные ID комнат
                 if self.manager.current_project.id:
-                    updated_project = load_project(self.manager.current_project.id)
+                    updated_project = load_project(
+                        self.manager.current_project.id)
                     if updated_project:
                         self.manager.current_project = updated_project
-                
+
                 # Обновляем сетку
                 self.update_rooms_grid()
                 popup.dismiss()
@@ -1891,13 +2758,6 @@ class RoomsScreen(Screen):
             size_hint=(0.8, 0.4)
         )
         popup.open()
-
-    def open_room_editor(self, room):
-        """Открывает редактор комнаты"""
-        # Сохраняем текущую комнату в менеджере экранов
-        self.manager.current_room = room
-        # Переходим в редактор
-        self.manager.current = 'room_editor'
 
     def go_back(self, instance):
         """Возврат к проектам"""
@@ -1926,7 +2786,6 @@ from kivy.graphics import Color, Line, Rectangle, Ellipse, Mesh
 from kivy.properties import NumericProperty, ListProperty
 from kivy.metrics import dp
 import math
-from kivy.graphics.stencil_instructions import StencilPush, StencilUse, StencilUnUse, StencilPop
 
 
 class GridWidget(Widget):
@@ -2005,6 +2864,8 @@ class GridWidget(Widget):
 
     def draw_editor(self):
         """Рисует редактор комнаты"""
+        self.canvas.clear()
+
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
@@ -2017,10 +2878,13 @@ class GridWidget(Widget):
             # Рисуем стены
             self.draw_walls()
 
+            # Рисуем размеры стен
+            self.draw_wall_dimensions()
+
             # Рисуем текущую точку
             self.draw_current_point()
 
-            # Рисуем линию, соединяющую первую и последнюю точку (если есть 3+ стены)
+            # Рисуем линию, соединяющую первую и последнюю точку
             if len(self.walls) >= 3:
                 self.draw_closing_line()
 
@@ -2323,14 +3187,15 @@ class GridWidget(Widget):
         if self.collide_point(*touch.pos):
             if self.is_touch_on_closing_line(touch):
                 self.add_closing_wall()
-                return True # Обработка завершена            
-        
+                return True  # Обработка завершена
+
             # Колесо мыши (оставляем для десктопа)
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
                     self.scale = max(0.1, self.scale - 0.05)
                 elif touch.button == 'scrollup':
-                    self.scale = min(3.0, self.scale + 0.05)  # Увеличен макс. масштаб до 3.0
+                    # Увеличен макс. масштаб до 3.0
+                    self.scale = min(3.0, self.scale + 0.05)
                 self.canvas.clear()
                 self.draw_editor()
                 return True
@@ -2339,7 +3204,8 @@ class GridWidget(Widget):
             self.touches[touch.id] = touch
             if len(self.touches) == 2:
                 touches = list(self.touches.values())
-                self.pinch_start_distance = self.get_distance(touches[0], touches[1])
+                self.pinch_start_distance = self.get_distance(
+                    touches[0], touches[1])
                 self.pinch_start_scale = self.scale
                 self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
@@ -2367,25 +3233,30 @@ class GridWidget(Widget):
             # Пинч-масштабирование
             touches = list(self.touches.values())
             current_distance = self.get_distance(touches[0], touches[1])
-            
+
             if self.pinch_start_distance:
                 scale_factor = current_distance / self.pinch_start_distance
                 new_scale = self.pinch_start_scale * scale_factor
-                new_scale = max(0.1, min(3.0, new_scale))  # Ограничение масштаба
-                
+                # Ограничение масштаба
+                new_scale = max(0.1, min(3.0, new_scale))
+
                 # Пересчитываем смещение относительно центра жеста
                 if self.pinch_center:
-                    old_center_x = (self.pinch_center[0] - self.offset_x) / self.scale
-                    old_center_y = (self.pinch_center[1] - self.offset_y) / self.scale
-                    
+                    old_center_x = (
+                        self.pinch_center[0] - self.offset_x) / self.scale
+                    old_center_y = (
+                        self.pinch_center[1] - self.offset_y) / self.scale
+
                     self.scale = new_scale
-                    self.offset_x = self.pinch_center[0] - old_center_x * self.scale
-                    self.offset_y = self.pinch_center[1] - old_center_y * self.scale
-                
+                    self.offset_x = self.pinch_center[0] - \
+                        old_center_x * self.scale
+                    self.offset_y = self.pinch_center[1] - \
+                        old_center_y * self.scale
+
                 self.canvas.clear()
                 self.draw_editor()
                 return True
-        
+
         # Обработка панорамирования (один палец)
         if self.dragging and self.last_touch_pos:
             dx = touch.x - self.last_touch_pos[0]
@@ -2396,7 +3267,7 @@ class GridWidget(Widget):
             self.canvas.clear()
             self.draw_editor()
             return True
-        
+
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -2406,6 +3277,57 @@ class GridWidget(Widget):
         self.dragging = False
         self.last_touch_pos = None
         return super().on_touch_up(touch)
+
+    def format_dimension(self, length_cm):
+        """Форматирует размер с пробелом как разделителем тысяч"""
+        return f"{int(length_cm):,}".replace(",", " ")
+
+    def draw_wall_dimensions(self):
+        """Рисует размеры стен над линиями"""
+        if not self.walls:
+            return
+
+        from kivy.core.text import Label as CoreLabel
+        from kivy.graphics import Color, Rectangle
+
+        for wall in self.walls:
+            x1, y1, x2, y2 = wall
+            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            dx = x2 - x1
+            dy = y2 - y1
+            length_wall = math.sqrt(dx**2 + dy**2)
+
+            if length_wall > 0:
+                nx = -dy / length_wall
+                ny = dx / length_wall
+                offset = 10
+                text_x = mid_x + nx * offset
+                text_y = mid_y + ny * offset
+                px_x, px_y = self.cm_to_px(text_x, text_y)
+                text = self.format_dimension(length) + " см"
+
+                label = CoreLabel(text=text, font_size=dp(12),
+                                  color=(0, 0, 0, 1))
+                label.refresh()
+
+                padding = 2
+                Color(1, 1, 1, 0.7)
+                Rectangle(
+                    pos=(px_x - label.texture.size[0]/2 - padding,
+                         px_y - label.texture.size[1]/2 - padding),
+                    size=(label.texture.size[0] + padding*2,
+                          label.texture.size[1] + padding*2)
+                )
+
+                Color(0, 0, 0, 1)
+                Rectangle(
+                    texture=label.texture,
+                    pos=(px_x - label.texture.size[0]/2,
+                         px_y - label.texture.size[1]/2),
+                    size=label.texture.size
+                )
 
 ============================================================
 ФАЙЛ: widgets\layout_widget.py
@@ -2432,7 +3354,7 @@ class LayoutWidget(Widget):
     grid_offset_y = NumericProperty(0)
     on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
     dragging_enabled = BooleanProperty(True)
-    show_dimensions = BooleanProperty(True) 
+    show_dimensions = BooleanProperty(True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2584,22 +3506,23 @@ class LayoutWidget(Widget):
 
     def draw_layout(self):
         self.canvas.clear()
+
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-            
+
             # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-            
+
             # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-            
+
             # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-            
+
             # 4. Рисуем цифры ТОЛЬКО если включено
-            if self.show_dimensions:  # ← УСЛОВИЕ ДОБАВЛЕНО
+            if self.show_dimensions:
                 self.draw_all_cut_dimensions()
 
     def draw_all_cut_dimensions(self):
@@ -2950,7 +3873,7 @@ class LayoutWidget(Widget):
             self.grid_offset_y += dy_cm
             self.last_touch_pos = touch.pos
             if self.on_grid_move:
-                self.on_grid_move() # Вызов callback для обновления
+                self.on_grid_move()  # Вызов callback для обновления
             self.draw_layout()
             return True
 

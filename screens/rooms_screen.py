@@ -58,13 +58,13 @@ class RoomsScreen(Screen):
         toolbar = BoxLayout(
             size_hint=(1, 0.15),
             padding=dp(10),
-            spacing=dp(10)
+            spacing=dp(10)  # ← КРИТИЧНО: отступ между кнопками
         )
 
         # Кнопка "Назад" к проектам
         btn_back = Button(
             text='← Назад',
-            font_size=dp(16),
+            font_size=dp(14),
             size_hint=(0.3, 1),
             background_color=(0.8, 0.8, 0.8, 1)
         )
@@ -73,7 +73,7 @@ class RoomsScreen(Screen):
         # Заголовок (будет обновляться)
         self.title_label = Label(
             text='Комнаты',
-            font_size=dp(18),
+            font_size=dp(16),
             size_hint=(0.4, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -83,8 +83,8 @@ class RoomsScreen(Screen):
 
         # Кнопка "Добавить комнату" с переносом текста
         btn_add = Button(
-            text='+ Новая\nкомната',  # Перенос на новую строку
-            font_size=dp(14),
+            text='+ Новая\nкомната',
+            font_size=dp(12),
             size_hint=(0.3, 1),
             background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1),
@@ -126,77 +126,122 @@ class RoomsScreen(Screen):
         """Обновляет сетку комнат"""
         self.rooms_container.clear_widgets()
         project = self.manager.current_project
-        
+
         if project:
-            self.title_label.text = f'Комнаты:\n{project.name}'
-            self.title_label.font_size = dp(16)
+            # ← КРИТИЧНО: Расчет общей площади для тулбара
+            from models import CeilingLayout
+            total_area = 0.0
+            for room in project.rooms:
+                try:
+                    if room.walls and len(room.walls) >= 3:
+                        temp_layout = CeilingLayout(room)
+                        # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                        temp_layout.calculate_layout()
+                        total_area += temp_layout.room_area_sqm if hasattr(
+                            temp_layout, 'room_area_sqm') else 0.0
+                except Exception as e:
+                    print(f"Ошибка расчета площади: {e}")
+                    continue
+
+            # ← КРИТИЧНО: правильное форматирование заголовка (3 строки)
+            if total_area > 0:
+                self.title_label.text = f'Комнаты:\n{project.name}\n{total_area:.1f} м²'
+            else:
+                self.title_label.text = f'Комнаты:\n{project.name}'
+
+            self.title_label.font_size = dp(14)
             self.title_label.halign = 'center'
             self.title_label.valign = 'middle'
-            self.title_label.max_lines = 2
-            
-            # Устанавливаем параметры сетки
+            self.title_label.max_lines = 3
+            self.title_label.text_size = (
+                self.title_label.width, self.title_label.height * 3)
+
+            # Параметры сетки
             self.rooms_container.cols = 2
             self.rooms_container.spacing = dp(10)
             self.rooms_container.padding = dp(10)
-            
+
             # Добавляем плитки комнат
             for room in project.rooms:
                 room_tile = self.create_room_tile(room)
                 self.rooms_container.add_widget(room_tile)
-            
-            # Автоматически устанавливаем высоту контейнера на основе содержимого
+
             self.rooms_container.height = self.rooms_container.minimum_height
-        
-        # Если комнат нет
-        if not project or not project.rooms:
-            empty_label = Label(
-                text='Нет комнат\nНажмите "+ Новая комната"',
-                font_size=dp(16),
-                color=(0.5, 0.5, 0.5, 1),
-                halign='center',
-                valign='middle',
-                size_hint_y=None
-            )
-            empty_label.bind(size=empty_label.setter('text_size'))
-            empty_label.height = self.height * 0.3
-            self.rooms_container.add_widget(empty_label)
-            self.rooms_container.height = self.rooms_container.minimum_height
+
+            # Если комнат нет
+            if not project.rooms:
+                empty_label = Label(
+                    text='Нет комнат\nНажмите "+ Новая комната"',
+                    font_size=dp(16),
+                    color=(0.5, 0.5, 0.5, 1),
+                    halign='center',
+                    valign='middle',
+                    size_hint_y=None
+                )
+                empty_label.bind(size=empty_label.setter('text_size'))
+                empty_label.height = self.height * 0.3
+                self.rooms_container.add_widget(empty_label)
+                self.rooms_container.height = self.rooms_container.minimum_height
 
     def create_room_tile(self, room):
         """Создает плитку для комнаты с кнопкой удаления"""
-        # Вычисляем ширину плитки
         container_width = self.rooms_container.width if self.rooms_container.width > 0 else self.width
-        tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        
-        # Используем RelativeLayout для точного позиционирования
+        tile_width = (container_width - dp(30)) / \
+            2 if container_width > 0 else dp(150)
+
         tile_layout = RelativeLayout(
             size_hint=(None, None),
             size=(tile_width, tile_width)
         )
-        
-        # Основная плитка - кнопка с фоном
+
+        # ← КРИТИЧНО: безопасный расчет площади комнаты
+        from models import CeilingLayout
+        room_area = 0.0
+        if room.walls and len(room.walls) >= 3:
+            try:
+                temp_layout = CeilingLayout(room)
+                # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                temp_layout.calculate_layout()
+                room_area = temp_layout.room_area_sqm if hasattr(
+                    temp_layout, 'room_area_sqm') else 0.0
+            except Exception as e:
+                print(f"Ошибка расчета площади: {e}")
+                room_area = 0.0
+
+        # ← КРИТИЧНО: правильное форматирование текста (2 строки)
+        if room_area > 0:
+            button_text = f"{room.name}\n{room_area:.1f} м²"
+        else:
+            button_text = room.name
+
         tile_button = Button(
             background_color=(0.95, 0.95, 0.95, 1),
             background_normal='',
-            text=room.name,
+            text=button_text,
             font_size=dp(16),
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), None),
-            shorten=True,
+            text_size=(tile_width - dp(20), tile_width - dp(20)),
+            shorten=False,
             max_lines=2
         )
-        tile_button.bind(size=tile_button.setter('text_size'))
-        tile_button.bind(on_press=lambda instance, r=room: self.open_room_editor(r))
-        
-        # Контейнер для кнопки удаления (точно в правом верхнем углу)
+
+        # ← КРИТИЧНО: Привязка для обновления text_size
+        tile_button.bind(
+            size=lambda inst, size: setattr(
+                inst, 'text_size', (size[0] - dp(20), size[1] - dp(20)))
+        )
+
+        tile_button.bind(on_press=lambda instance,
+                         r=room: self.open_room_editor(r))
+
+        # Кнопка удаления
         delete_container = BoxLayout(
             size_hint=(None, None),
             size=(dp(25), dp(25)),
             pos_hint={'right': 1, 'top': 1}
         )
-        
         delete_button = Button(
             text='X',
             font_size=dp(12),
@@ -206,14 +251,22 @@ class RoomsScreen(Screen):
             halign='center',
             valign='middle'
         )
-        delete_button.bind(on_press=lambda instance, r_id=room.id: self.confirm_delete_room(r_id))
-        
+        delete_button.bind(on_press=lambda instance,
+                           r_id=room.id: self.confirm_delete_room(r_id))
         delete_container.add_widget(delete_button)
-        
+
         tile_layout.add_widget(tile_button)
         tile_layout.add_widget(delete_container)
-        
         return tile_layout
+
+    def open_room_editor(self, room):
+        """Открывает редактор комнаты"""
+        self.manager.current_room = room
+        # ← КРИТИЧНО: если комната уже имеет стены (3+), пропускаем редактор
+        if room.walls and len(room.walls) >= 3:
+            self.manager.current = 'layout'
+        else:
+            self.manager.current = 'room_editor'
 
     def confirm_delete_room(self, room_id):
         """Показывает диалог подтверждения удаления комнаты."""
@@ -234,19 +287,22 @@ class RoomsScreen(Screen):
                 self.manager.current_project.rooms.remove(room_to_remove)
                 # Сохраняем проект (это удалит комнату из БД)
                 save_project(self.manager.current_project)
-                
+
                 # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД для актуализации данных
                 if self.manager.current_project.id:
-                    updated_project = load_project(self.manager.current_project.id)
+                    updated_project = load_project(
+                        self.manager.current_project.id)
                     if updated_project:
                         self.manager.current_project = updated_project
-                
-                print(f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
+
+                print(
+                    f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
                 # Обновляем сетку
                 self.update_rooms_grid()
                 popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
             else:
-                print(f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
+                print(
+                    f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
                 popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
 
         def cancel_delete(dt):
@@ -300,13 +356,14 @@ class RoomsScreen(Screen):
                 self.manager.current_project.rooms.append(room)
                 # Сохраняем проект в БД после добавления комнаты
                 save_project(self.manager.current_project)
-                
+
                 # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: перезагружаем проект из БД, чтобы получить актуальные ID комнат
                 if self.manager.current_project.id:
-                    updated_project = load_project(self.manager.current_project.id)
+                    updated_project = load_project(
+                        self.manager.current_project.id)
                     if updated_project:
                         self.manager.current_project = updated_project
-                
+
                 # Обновляем сетку
                 self.update_rooms_grid()
                 popup.dismiss()
@@ -327,13 +384,6 @@ class RoomsScreen(Screen):
             size_hint=(0.8, 0.4)
         )
         popup.open()
-
-    def open_room_editor(self, room):
-        """Открывает редактор комнаты"""
-        # Сохраняем текущую комнату в менеджере экранов
-        self.manager.current_room = room
-        # Переходим в редактор
-        self.manager.current = 'room_editor'
 
     def go_back(self, instance):
         """Возврат к проектам"""

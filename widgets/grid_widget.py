@@ -3,7 +3,6 @@ from kivy.graphics import Color, Line, Rectangle, Ellipse, Mesh
 from kivy.properties import NumericProperty, ListProperty
 from kivy.metrics import dp
 import math
-from kivy.graphics.stencil_instructions import StencilPush, StencilUse, StencilUnUse, StencilPop
 
 
 class GridWidget(Widget):
@@ -82,6 +81,8 @@ class GridWidget(Widget):
 
     def draw_editor(self):
         """Рисует редактор комнаты"""
+        self.canvas.clear()
+
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
@@ -94,10 +95,13 @@ class GridWidget(Widget):
             # Рисуем стены
             self.draw_walls()
 
+            # Рисуем размеры стен
+            self.draw_wall_dimensions()
+
             # Рисуем текущую точку
             self.draw_current_point()
 
-            # Рисуем линию, соединяющую первую и последнюю точку (если есть 3+ стены)
+            # Рисуем линию, соединяющую первую и последнюю точку
             if len(self.walls) >= 3:
                 self.draw_closing_line()
 
@@ -400,14 +404,15 @@ class GridWidget(Widget):
         if self.collide_point(*touch.pos):
             if self.is_touch_on_closing_line(touch):
                 self.add_closing_wall()
-                return True # Обработка завершена            
-        
+                return True  # Обработка завершена
+
             # Колесо мыши (оставляем для десктопа)
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
                     self.scale = max(0.1, self.scale - 0.05)
                 elif touch.button == 'scrollup':
-                    self.scale = min(3.0, self.scale + 0.05)  # Увеличен макс. масштаб до 3.0
+                    # Увеличен макс. масштаб до 3.0
+                    self.scale = min(3.0, self.scale + 0.05)
                 self.canvas.clear()
                 self.draw_editor()
                 return True
@@ -416,7 +421,8 @@ class GridWidget(Widget):
             self.touches[touch.id] = touch
             if len(self.touches) == 2:
                 touches = list(self.touches.values())
-                self.pinch_start_distance = self.get_distance(touches[0], touches[1])
+                self.pinch_start_distance = self.get_distance(
+                    touches[0], touches[1])
                 self.pinch_start_scale = self.scale
                 self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
@@ -444,25 +450,30 @@ class GridWidget(Widget):
             # Пинч-масштабирование
             touches = list(self.touches.values())
             current_distance = self.get_distance(touches[0], touches[1])
-            
+
             if self.pinch_start_distance:
                 scale_factor = current_distance / self.pinch_start_distance
                 new_scale = self.pinch_start_scale * scale_factor
-                new_scale = max(0.1, min(3.0, new_scale))  # Ограничение масштаба
-                
+                # Ограничение масштаба
+                new_scale = max(0.1, min(3.0, new_scale))
+
                 # Пересчитываем смещение относительно центра жеста
                 if self.pinch_center:
-                    old_center_x = (self.pinch_center[0] - self.offset_x) / self.scale
-                    old_center_y = (self.pinch_center[1] - self.offset_y) / self.scale
-                    
+                    old_center_x = (
+                        self.pinch_center[0] - self.offset_x) / self.scale
+                    old_center_y = (
+                        self.pinch_center[1] - self.offset_y) / self.scale
+
                     self.scale = new_scale
-                    self.offset_x = self.pinch_center[0] - old_center_x * self.scale
-                    self.offset_y = self.pinch_center[1] - old_center_y * self.scale
-                
+                    self.offset_x = self.pinch_center[0] - \
+                        old_center_x * self.scale
+                    self.offset_y = self.pinch_center[1] - \
+                        old_center_y * self.scale
+
                 self.canvas.clear()
                 self.draw_editor()
                 return True
-        
+
         # Обработка панорамирования (один палец)
         if self.dragging and self.last_touch_pos:
             dx = touch.x - self.last_touch_pos[0]
@@ -473,7 +484,7 @@ class GridWidget(Widget):
             self.canvas.clear()
             self.draw_editor()
             return True
-        
+
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -483,3 +494,54 @@ class GridWidget(Widget):
         self.dragging = False
         self.last_touch_pos = None
         return super().on_touch_up(touch)
+
+    def format_dimension(self, length_cm):
+        """Форматирует размер с пробелом как разделителем тысяч"""
+        return f"{int(length_cm):,}".replace(",", " ")
+
+    def draw_wall_dimensions(self):
+        """Рисует размеры стен над линиями"""
+        if not self.walls:
+            return
+
+        from kivy.core.text import Label as CoreLabel
+        from kivy.graphics import Color, Rectangle
+
+        for wall in self.walls:
+            x1, y1, x2, y2 = wall
+            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            dx = x2 - x1
+            dy = y2 - y1
+            length_wall = math.sqrt(dx**2 + dy**2)
+
+            if length_wall > 0:
+                nx = -dy / length_wall
+                ny = dx / length_wall
+                offset = 10
+                text_x = mid_x + nx * offset
+                text_y = mid_y + ny * offset
+                px_x, px_y = self.cm_to_px(text_x, text_y)
+                text = self.format_dimension(length) + " см"
+
+                label = CoreLabel(text=text, font_size=dp(12),
+                                  color=(0, 0, 0, 1))
+                label.refresh()
+
+                padding = 2
+                Color(1, 1, 1, 0.7)
+                Rectangle(
+                    pos=(px_x - label.texture.size[0]/2 - padding,
+                         px_y - label.texture.size[1]/2 - padding),
+                    size=(label.texture.size[0] + padding*2,
+                          label.texture.size[1] + padding*2)
+                )
+
+                Color(0, 0, 0, 1)
+                Rectangle(
+                    texture=label.texture,
+                    pos=(px_x - label.texture.size[0]/2,
+                         px_y - label.texture.size[1]/2),
+                    size=label.texture.size
+                )

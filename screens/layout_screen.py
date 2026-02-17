@@ -17,7 +17,7 @@ class LayoutScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.snap_mode = 0
-        self.control_mode = 'grid'  # 'grid' или 'pan_zoom'
+        self.control_mode = 'grid'
 
         main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
         self.selected_corner = None
@@ -25,21 +25,26 @@ class LayoutScreen(Screen):
         # Панель инструментов
         toolbar = self.create_toolbar()
 
-        # Область с раскладкой
-        self.layout_widget = LayoutWidget(size_hint=(1, 0.8))
+        # ← КРИТИЧНО: Область с раскладкой с фиксированным size_hint
+        self.layout_widget = LayoutWidget(size_hint=(1, 1))
 
-        # Панель информации и управления
+        # Панель управления
         control_panel = self.create_control_panel()
 
-        # Панель статистики (обновленная)
+        # Панель статистики
         stats_panel = self.create_stats_panel()
 
+        # ← КРИТИЧНО: Собираем в правильный порядок
         main_layout.add_widget(toolbar)
         main_layout.add_widget(self.layout_widget)
         main_layout.add_widget(control_panel)
         main_layout.add_widget(stats_panel)
 
-        self.add_widget(main_layout)
+        # ← КРИТИЧНО: Оборачиваем в FloatLayout для правильного z-ordering
+        from kivy.uix.floatlayout import FloatLayout
+        overlay = FloatLayout()
+        overlay.add_widget(main_layout)
+        self.add_widget(overlay)
 
     def toggle_dimensions(self, instance):
         """Переключает отображение размеров резаных плиток"""
@@ -74,25 +79,33 @@ class LayoutScreen(Screen):
         if current_room:
             print(f"Загрузка комнаты: {current_room.name}")
             print(f"Стены: {len(current_room.walls)}")
-            # Отладочная информация о стенах
-            for i, wall in enumerate(current_room.walls):
-                print(f"  Стена {i}: {wall}")
 
             # Устанавливаем стены в виджет
             self.layout_widget.set_room(current_room.walls)
+
             # Создаем расчет раскладки
             self.ceiling_layout = CeilingLayout(current_room)
-            # ВАЖНО: Устанавливаем начальное смещение сетки в 0, а не берем из виджета
-            self.ceiling_layout.grid_offset_x = 0
-            self.ceiling_layout.grid_offset_y = 0
+
+            # ← КРИТИЧНО: загружаем сохранённое смещение из комнаты
+            self.ceiling_layout.grid_offset_x = getattr(
+                current_room, 'grid_offset_x', 0)
+            self.ceiling_layout.grid_offset_y = getattr(
+                current_room, 'grid_offset_y', 0)
+            self.layout_widget.grid_offset_x = self.ceiling_layout.grid_offset_x
+            self.layout_widget.grid_offset_y = self.ceiling_layout.grid_offset_y
+
             # Рассчитываем раскладку
             self.ceiling_layout.calculate_layout()
+
             # Передаем layout в виджет
             self.layout_widget.layout = self.ceiling_layout
+
             # Устанавливаем callback для обновления статистики при движении сетки
             self.layout_widget.on_grid_move = self.on_grid_moved
+
             # Обновляем статистику
             self.update_stats()
+
             # Явно перерисовываем
             self.layout_widget.draw_layout()
 
@@ -123,15 +136,15 @@ class LayoutScreen(Screen):
     def create_toolbar(self):
         """Создает панель инструментов с кнопкой режима"""
         toolbar = BoxLayout(
-            size_hint=(1, 0.1),
-            padding=dp(10),
-            spacing=dp(10)
+            size_hint=(1, 0.14),
+            padding=dp(5),
+            spacing=dp(5)  # ← КРИТИЧНО: отступ между кнопками
         )
 
         # Кнопка "Назад"
         btn_back = Button(
             text='Назад',
-            font_size=dp(16),
+            font_size=dp(14),  # ← Чуть меньше шрифт
             size_hint=(0.2, 1),
             background_color=(0.8, 0.8, 0.8, 1)
         )
@@ -140,7 +153,7 @@ class LayoutScreen(Screen):
         # Заголовок
         title = Label(
             text='Раскладка\n60×60 см',
-            font_size=dp(14),
+            font_size=dp(12),
             size_hint=(0.3, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -152,8 +165,8 @@ class LayoutScreen(Screen):
 
         # Кнопка режима управления
         self.mode_button = Button(
-            text='Сетка',  # Иконка и текст
-            font_size=dp(14),
+            text='Сетка',
+            font_size=dp(12),
             size_hint=(0.25, 1),
             background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1)
@@ -163,7 +176,7 @@ class LayoutScreen(Screen):
         # Кнопка "Сброс"
         btn_reset = Button(
             text='Сброс',
-            font_size=dp(14),
+            font_size=dp(12),
             size_hint=(0.25, 1),
             background_color=(0.9, 0.6, 0.2, 1),
             color=(1, 1, 1, 1)
@@ -345,6 +358,30 @@ class LayoutScreen(Screen):
 
     def go_back(self, instance):
         """Возврат в редактор"""
-        # Сохраняем проект при выходе с экрана раскладки (если нужно)
-        # save_project(self.manager.current_project)
+        # Сохраняем текущее смещение сетки в комнату
+        if hasattr(self, 'ceiling_layout') and self.manager.current_room:
+            self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
+            self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
+            from database import save_project
+            save_project(self.manager.current_project)
+
+        # ← Возвращаемся всегда в редактор
         self.manager.current = 'room_editor'
+
+    # def go_back(self, instance):
+    #     """Возврат — пропускаем редактор если комната имеет стены"""
+    #     # Сохраняем текущее смещение сетки в комнату
+    #     if hasattr(self, 'ceiling_layout') and self.manager.current_room:
+    #         self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
+    #         self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
+    #         from database import save_project
+    #         save_project(self.manager.current_project)
+
+    #     # ← КРИТИЧНО: Проверяем есть ли стены у комнаты
+    #     current_room = self.manager.current_room
+    #     if current_room and current_room.walls and len(current_room.walls) >= 3:
+    #         # Если комната имеет стены — идем сразу в комнаты
+    #         self.manager.current = 'rooms'
+    #     else:
+    #         # Иначе — в редактор
+    #         self.manager.current = 'room_editor'
