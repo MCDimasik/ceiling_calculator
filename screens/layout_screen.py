@@ -9,6 +9,7 @@ from kivy.uix.floatlayout import FloatLayout
 from widgets.layout_widget import LayoutWidget
 from models import CeilingLayout
 from database import save_project  # Импортируем функцию сохранения
+from kivy.clock import Clock  # ← ДОБАВИТЬ импорт
 
 
 class LayoutScreen(Screen):
@@ -19,13 +20,18 @@ class LayoutScreen(Screen):
         self.snap_mode = 0
         self.control_mode = 'grid'
 
+        # ← КРИТИЧНО: Переменные для авто-повтора кнопок
+        self.repeat_event = None
+        self.repeat_dx = 0
+        self.repeat_dy = 0
+
         main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
         self.selected_corner = None
 
         # Панель инструментов
         toolbar = self.create_toolbar()
 
-        # ← КРИТИЧНО: Область с раскладкой с фиксированным size_hint
+        # Область с раскладкой
         self.layout_widget = LayoutWidget(size_hint=(1, 1))
 
         # Панель управления
@@ -34,13 +40,13 @@ class LayoutScreen(Screen):
         # Панель статистики
         stats_panel = self.create_stats_panel()
 
-        # ← КРИТИЧНО: Собираем в правильный порядок
+        # Собираем в правильный порядок
         main_layout.add_widget(toolbar)
         main_layout.add_widget(self.layout_widget)
         main_layout.add_widget(control_panel)
         main_layout.add_widget(stats_panel)
 
-        # ← КРИТИЧНО: Оборачиваем в FloatLayout для правильного z-ordering
+        # Оборачиваем в FloatLayout для правильного z-ordering
         from kivy.uix.floatlayout import FloatLayout
         overlay = FloatLayout()
         overlay.add_widget(main_layout)
@@ -54,12 +60,31 @@ class LayoutScreen(Screen):
         # Инвертируем состояние
         self.layout_widget.show_dimensions = not self.layout_widget.show_dimensions
 
-        # Меняем текст кнопки с переносом
+        # Меняем текст кнопки
         if self.layout_widget.show_dimensions:
-            instance.text = 'Скрыть nразмеры'
+            instance.text = 'Скрыть размеры плит'
             instance.background_color = (0.5, 0.5, 0.5, 1)
         else:
-            instance.text = 'Показать nразмеры'
+            instance.text = 'Показать размеры плит'
+            instance.background_color = (0.3, 0.7, 0.3, 1)
+
+        # Перерисовываем
+        self.layout_widget.draw_layout()
+
+    def toggle_wall_dimensions(self, instance):
+        """← НОВОЕ: Переключает отображение размеров стен"""
+        if not hasattr(self, 'layout_widget'):
+            return
+
+        # Инвертируем состояние
+        self.layout_widget.show_wall_dimensions = not self.layout_widget.show_wall_dimensions
+
+        # Меняем текст кнопки
+        if self.layout_widget.show_wall_dimensions:
+            instance.text = 'Скрыть размеры стен'
+            instance.background_color = (0.5, 0.5, 0.5, 1)
+        else:
+            instance.text = 'Показать размеры стен'
             instance.background_color = (0.3, 0.7, 0.3, 1)
 
         # Перерисовываем
@@ -153,7 +178,7 @@ class LayoutScreen(Screen):
         # Заголовок
         title = Label(
             text='Раскладка\n60×60 см',
-            font_size=dp(12),
+            font_size=dp(14),
             size_hint=(0.3, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -166,7 +191,7 @@ class LayoutScreen(Screen):
         # Кнопка режима управления
         self.mode_button = Button(
             text='Сетка',
-            font_size=dp(12),
+            font_size=dp(14),
             size_hint=(0.25, 1),
             background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1)
@@ -176,7 +201,7 @@ class LayoutScreen(Screen):
         # Кнопка "Сброс"
         btn_reset = Button(
             text='Сброс',
-            font_size=dp(12),
+            font_size=dp(14),
             size_hint=(0.25, 1),
             background_color=(0.9, 0.6, 0.2, 1),
             color=(1, 1, 1, 1)
@@ -194,7 +219,7 @@ class LayoutScreen(Screen):
         """Переключает режим управления"""
         if self.control_mode == 'grid':
             self.control_mode = 'pan_zoom'
-            self.mode_button.text = '👆 Панорама'
+            self.mode_button.text = 'Панорама'
             self.mode_button.background_color = (0.3, 0.7, 0.3, 1)
             # Отключаем перемещение сетки пальцем
             self.layout_widget.dragging_enabled = False
@@ -223,99 +248,159 @@ class LayoutScreen(Screen):
                 self.layout_widget.draw_layout()
 
     def create_control_panel(self):
-        """Создает панель управления сеткой с одной строкой кнопок и строкой кнопки переключения размеров"""
+        """Создает панель управления сеткой (2 строки: стрелки + 2 кнопки)"""
         # Основной контейнер с вертикальной ориентацией (2 строки)
         control_panel = BoxLayout(
             orientation='vertical',
-            size_hint=(1, 0.1),  # Увеличена высота до 10% экрана
+            size_hint=(1, 0.1),
             padding=dp(5),
             spacing=dp(5)
         )
 
-        # === СТРОКА 1: кнопки смещения ===
+        # === СТРОКА 1: кнопки смещения (с авто-повтором) ===
         row1 = BoxLayout(
             size_hint=(1, 0.5),
             spacing=dp(5)
         )
 
-        # Кнопки смещения сетки с шагом 1 см
+        # ← КРИТИЧНО: Кнопки с привязкой on_press и on_release для авто-повтора
         btn_left = Button(
             text='<-',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_left.bind(on_press=lambda x: self.move_grid(-1, 0))
+        btn_left.bind(
+            on_press=lambda x: self.start_repeat_move(-1, 0),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_up = Button(
             text='^',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_up.bind(on_press=lambda x: self.move_grid(0, 1))
+        btn_up.bind(
+            on_press=lambda x: self.start_repeat_move(0, 1),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_down = Button(
             text='v',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_down.bind(on_press=lambda x: self.move_grid(0, -1))
+        btn_down.bind(
+            on_press=lambda x: self.start_repeat_move(0, -1),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_right = Button(
             text='->',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_right.bind(on_press=lambda x: self.move_grid(1, 0))
+        btn_right.bind(
+            on_press=lambda x: self.start_repeat_move(1, 0),
+            on_release=lambda x: self.stop_repeat_move()
+        )
 
         row1.add_widget(btn_left)
         row1.add_widget(btn_up)
         row1.add_widget(btn_down)
         row1.add_widget(btn_right)
 
-        # === СТРОКА 2: кнопка переключения размеров ===
+        # === СТРОКА 2: ДВЕ кнопки переключения размеров (убрали "Сброс") ===
         row2 = BoxLayout(
-            size_hint=(1, 0.5),
-            padding=(dp(10), 0)
+            size_hint=(1, 0.6),
+            spacing=dp(5),  # ← Отступ между кнопками
         )
 
-        # Кнопка с переносом текста и увеличенной высотой
+        # Кнопка 1: Размеры плиток
         self.toggle_dims_btn = Button(
-            text='Скрыть размеры',  # Перенос через \
-            font_size=dp(14),
-            size_hint=(0.4, 1),
+            text='Скрыть размеры плит',
+            font_size=dp(12),
+            size_hint=(0.5, 1),  # ← 50% ширины
             background_color=(0.5, 0.5, 0.5, 1),
             color=(1, 1, 1, 1),
             halign='center',
             valign='middle'
         )
-        # Настройка переноса текста
         self.toggle_dims_btn.bind(
             size=lambda instance, size: setattr(
                 instance, 'text_size', (size[0] * 0.9, None))
         )
         self.toggle_dims_btn.bind(on_press=self.toggle_dimensions)
+
+        # ← Кнопка 2: Размеры стен
+        self.toggle_wall_dims_btn = Button(
+            text='Скрыть размеры стен',
+            font_size=dp(12),
+            size_hint=(0.5, 1),  # ← 50% ширины
+            background_color=(0.5, 0.5, 0.5, 1),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle'
+        )
+        self.toggle_wall_dims_btn.bind(
+            size=lambda instance, size: setattr(
+                instance, 'text_size', (size[0] * 0.9, None))
+        )
+        self.toggle_wall_dims_btn.bind(on_press=self.toggle_wall_dimensions)
+
         row2.add_widget(self.toggle_dims_btn)
+        row2.add_widget(self.toggle_wall_dims_btn)
 
         # Собираем обе строки в панель
         control_panel.add_widget(row1)
         control_panel.add_widget(row2)
+
         return control_panel
 
-    def create_stats_panel(self):
-        """Создает панель статистики"""
-        stats_panel = BoxLayout(
-            size_hint=(1, 0.05),
-            padding=dp(10)
+    # ← КРИТИЧНО: НОВЫЕ МЕТОДЫ для авто-повтора
+    def start_repeat_move(self, dx, dy):
+        """Запускает авто-повтор смещения сетки"""
+        # Сначала делаем один сдвиг сразу
+        self.move_grid(dx, dy)
+
+        # Сохраняем направление
+        self.repeat_dx = dx
+        self.repeat_dy = dy
+
+        # Параметры скорости
+        initial_delay = 0.3  # 300мс перед первым повтором
+        repeat_interval = 0.1  # 100мс между повторами
+
+        # Планируем первый повтор через задержку
+        from kivy.clock import Clock
+        self.repeat_event = Clock.schedule_once(
+            lambda dt: self._repeat_move_loop(repeat_interval),
+            initial_delay
         )
-        # Изменяем текст на площадь
-        self.stats_label = Label(
-            text='Целых: 0 | Резаных: 0 | Площадь: 0.0 м²',
-            font_size=dp(14),
-            color=(0, 0, 0, 1)
+
+    def _repeat_move_loop(self, interval):
+        """Цикл авто-повтора"""
+        # Делаем сдвиг
+        self.move_grid(self.repeat_dx, self.repeat_dy)
+
+        # Планируем следующий повтор
+        from kivy.clock import Clock
+        self.repeat_event = Clock.schedule_once(
+            lambda dt: self._repeat_move_loop(interval),
+            interval
         )
-        stats_panel.add_widget(self.stats_label)
-        return stats_panel
+
+    def stop_repeat_move(self):
+        """Останавливает авто-повтор"""
+        if self.repeat_event:
+            from kivy.clock import Clock
+            Clock.unschedule(self.repeat_event)
+            self.repeat_event = None
+        self.repeat_dx = 0
+        self.repeat_dy = 0
 
     def move_grid(self, dx, dy):
         """Смещает сетку на dx, dy сантиметров с немедленным отображением"""
@@ -332,10 +417,27 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.grid_offset_y = self.layout_widget.grid_offset_y
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
-            # КРИТИЧЕСКИ ВАЖНО: вызываем callback вручную для немедленного обновления
-            self.on_grid_moved()
+
+                # Вызываем callback вручную для немедленного обновления
+                self.on_grid_moved()
+
             # Перерисовываем
             self.layout_widget.draw_layout()
+
+    def create_stats_panel(self):
+        """Создает панель статистики"""
+        stats_panel = BoxLayout(
+            size_hint=(1, 0.05),
+            padding=dp(10)
+        )
+        # Изменяем текст на площадь
+        self.stats_label = Label(
+            text='Целых: 0 | Резаных: 0 | Площадь: 0.0 м²',
+            font_size=dp(14),
+            color=(0, 0, 0, 1)
+        )
+        stats_panel.add_widget(self.stats_label)
+        return stats_panel
 
     def reset_grid(self, instance):
         """Сбрасывает смещение сетки к (0, 0)"""
@@ -358,30 +460,26 @@ class LayoutScreen(Screen):
 
     def go_back(self, instance):
         """Возврат в редактор"""
-        # Сохраняем текущее смещение сетки в комнату
+        # ← КРИТИЧНО: Сохраняем только если смещение изменилось
         if hasattr(self, 'ceiling_layout') and self.manager.current_room:
-            self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
-            self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
-            from database import save_project
-            save_project(self.manager.current_project)
+            current_room = self.manager.current_room
 
-        # ← Возвращаемся всегда в редактор
+            # Проверяем, изменилось ли смещение
+            old_offset_x = getattr(current_room, 'grid_offset_x', 0)
+            old_offset_y = getattr(current_room, 'grid_offset_y', 0)
+            new_offset_x = self.ceiling_layout.grid_offset_x
+            new_offset_y = self.ceiling_layout.grid_offset_y
+
+            # Сохраняем ТОЛЬКО если значения изменились
+            if old_offset_x != new_offset_x or old_offset_y != new_offset_y:
+                current_room.grid_offset_x = new_offset_x
+                current_room.grid_offset_y = new_offset_y
+                from database import save_project
+                save_project(self.manager.current_project)
+                print(
+                    f"Смещение сетки сохранено: {new_offset_x}×{new_offset_y} см")
+            else:
+                print("Смещение сетки не изменилось, сохранение пропущено")
+
+        # Возвращаемся в редактор
         self.manager.current = 'room_editor'
-
-    # def go_back(self, instance):
-    #     """Возврат — пропускаем редактор если комната имеет стены"""
-    #     # Сохраняем текущее смещение сетки в комнату
-    #     if hasattr(self, 'ceiling_layout') and self.manager.current_room:
-    #         self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
-    #         self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
-    #         from database import save_project
-    #         save_project(self.manager.current_project)
-
-    #     # ← КРИТИЧНО: Проверяем есть ли стены у комнаты
-    #     current_room = self.manager.current_room
-    #     if current_room and current_room.walls and len(current_room.walls) >= 3:
-    #         # Если комната имеет стены — идем сразу в комнаты
-    #         self.manager.current = 'rooms'
-    #     else:
-    #         # Иначе — в редактор
-    #         self.manager.current = 'room_editor'

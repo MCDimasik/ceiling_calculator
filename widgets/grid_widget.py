@@ -1,64 +1,54 @@
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Line, Rectangle, Ellipse, Mesh
-from kivy.properties import NumericProperty, ListProperty
+from kivy.properties import NumericProperty, ListProperty, BooleanProperty  # ← Добавили BooleanProperty
 from kivy.metrics import dp
 import math
 
 
 class GridWidget(Widget):
     """Виджет для отображения масштабируемой сетки"""
-
     scale = NumericProperty(0.2)
     offset_x = NumericProperty(0)
     offset_y = NumericProperty(0)
-
-    # Добавляем свойство для хранения точек комнаты
     room_points = ListProperty([])
-
+    room_closed = BooleanProperty(False)  # ← НОВОЕ: Флаг замкнутости комнаты
+    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
         # Текущая позиция (в сантиметрах)
         self.current_pos_cm = [0, 0]
-
         # Список стен
         self.walls = []
-
         # История для отмены
         self.undo_stack = []
         self.redo_stack = []
-
+        # ← КРИТИЧНО: Флаг чтобы избежать двойного сохранения
+        self._saving_state = False
         # Для перетаскивания (panning)
         self.dragging = False
         self.last_touch_pos = None
-
-        self.touches = {}  # Словарь для отслеживания касаний: {touch.id: touch}
+        self.touches = {}
         self.pinch_start_distance = None
         self.pinch_start_scale = None
         self.pinch_center = None
-
         # Для обработки клика на линию-доводчик
         self.closing_line_start = None
         self.closing_line_end = None
         self.closing_line_points = []
-
-        # Цвета согласно ТЗ
-        self.bg_color = (0.12, 0.13, 0.13, 1)      # #1e2022 - темный фон
-        self.wall_color = (0.94, 0.96, 0.98, 1)    # #f0f5f9 - светлые стены
-        self.point_color = (0.94, 0.96, 0.98, 1)   # #f0f5f9 - светлая точка
-        # #52616b - серый для заполненной комнаты
+        # Цвета
+        self.bg_color = (0.12, 0.13, 0.13, 1)
+        self.wall_color = (0.94, 0.96, 0.98, 1)
+        self.point_color = (0.94, 0.96, 0.98, 1)
         self.room_color = (0.32, 0.38, 0.42, 1)
-        # #c9d6df - цвет линии соединения
         self.closing_line_color = (0.79, 0.84, 0.87, 1)
-
-        # Центрируем камеру на точке (0,0)
+        # Центрируем камеру
         self.center_camera()
-
         # Сначала рисуем
         self.draw_editor()
-
         # Привязываем обновление при изменении размера
         self.bind(size=self._update_canvas)
+        # ← КРИТИЧНО: Сохраняем начальное состояние
+        self.save_state()
 
     def center_camera(self):
         """Центрирует камеру на точке (0,0)"""
@@ -82,27 +72,21 @@ class GridWidget(Widget):
     def draw_editor(self):
         """Рисует редактор комнаты"""
         self.canvas.clear()
-
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-
-            # Рисуем заполненную область комнаты (если есть стены)
-            if len(self.walls) >= 3:
+            # ← КРИТИЧНО: Рисуем заливку ТОЛЬКО если комната замкнута
+            if len(self.walls) >= 3 and self.room_closed:
                 self.draw_room_fill()
-
             # Рисуем стены
             self.draw_walls()
-
             # Рисуем размеры стен
             self.draw_wall_dimensions()
-
             # Рисуем текущую точку
             self.draw_current_point()
-
-            # Рисуем линию, соединяющую первую и последнюю точку
-            if len(self.walls) >= 3:
+            # Рисуем линию-доводчик
+            if len(self.walls) >= 3 and not self.room_closed:
                 self.draw_closing_line()
 
     def draw_closing_line(self):
@@ -177,61 +161,39 @@ class GridWidget(Widget):
         return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
     def draw_room_fill(self):
-        """Правильная заливка внутренней области комнаты"""
-        if len(self.walls) < 3:
+        """Правильная заливка внутренней области комнаты (только для замкнутых)"""
+        if len(self.walls) < 3 or not self.room_closed:
             return
-
-        # Собираем точки в правильном порядке для контура
+        # Собираем точки в правильном порядке
         points = []
         if self.walls:
-            # Первая точка первой стены
             points.append((self.walls[0][0], self.walls[0][1]))
-            # Конечные точки всех стен
             for wall in self.walls:
                 points.append((wall[2], wall[3]))
-            # Если комната не замкнута, замыкаем полигон
-            if points[-1] != points[0]:
-                points.append(points[0])
-
-        # Проверяем, достаточно ли точек для заливки
+        # Замыкаем полигон
+        if points[-1] != points[0]:
+            points.append(points[0])
         if len(points) < 4:
             return
-
         # Преобразуем точки в экранные координаты
         screen_points = []
         for x, y in points:
             px = self.cm_to_px(x, y)
             screen_points.extend([px[0], px[1]])
-
-        if len(screen_points) < 8:  # Минимум 4 точки для полигона
+        if len(screen_points) < 8:
             return
-
         with self.canvas:
-            # Заливаем полигон цветом комнаты
             Color(*self.room_color)
-
-            # Создаем Mesh для заливки сложных форм
+            # ← КРИТИЧНО: Триангуляция "веером" от первой точки
             vertices = []
             indices = []
-
-            # Используем триангуляцию "веером" от центра масс
-            center_x = sum(screen_points[i] for i in range(
-                0, len(screen_points), 2)) / (len(screen_points) // 2)
-            center_y = sum(screen_points[i] for i in range(
-                1, len(screen_points), 2)) / (len(screen_points) // 2)
-
-            # Создаем треугольники от центра к каждой паре соседних точек
-            for i in range(0, len(screen_points) - 2, 2):
-                # Центр
-                vertices.extend([center_x, center_y, 0, 0])
-                # Текущая точка
+            anchor_x = screen_points[0]
+            anchor_y = screen_points[1]
+            for i in range(2, len(screen_points) - 2, 2):
+                vertices.extend([anchor_x, anchor_y, 0, 0])
                 vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
-                # Следующая точка
                 vertices.extend([screen_points[i+2], screen_points[i+3], 0, 0])
-
-            # Создаем индексы для треугольников
             indices = list(range(len(vertices) // 4))
-
             if vertices:
                 Mesh(vertices=vertices, indices=indices, mode='triangles')
 
@@ -258,13 +220,19 @@ class GridWidget(Widget):
 
     def save_state(self):
         """Сохраняет текущее состояние для отмены"""
+        # ← КРИТИЧНО: Защита от двойного сохранения
+        if self._saving_state:
+            return
+        self._saving_state = True
         state = {
-            'walls': [w[:] for w in self.walls],  # Копируем стены
-            'current_pos': self.current_pos_cm[:]  # Копируем позицию
+            'walls': [w[:] for w in self.walls],
+            'current_pos': self.current_pos_cm[:],
+            'room_closed': self.room_closed  # ← Сохраняем флаг замкнутости
         }
         self.undo_stack.append(state)
         # При новом действии очищаем стек повторения
         self.redo_stack = []
+        self._saving_state = False
 
     def restore_state(self, index):
         """Восстанавливает состояние из истории"""
@@ -279,58 +247,57 @@ class GridWidget(Widget):
 
     def undo(self):
         """Отменяет последнее действие"""
+        # ← КРИТИЧНО: Нужно минимум 2 состояния (текущее + предыдущее)
         if len(self.undo_stack) > 1:
-            # Сохраняем текущее состояние для возможного redo
+            # Сохраняем текущее состояние для redo
             current_state = self.undo_stack.pop()
             self.redo_stack.append(current_state)
-
             # Восстанавливаем предыдущее состояние
             prev_state = self.undo_stack[-1]
             self.walls = [w[:] for w in prev_state['walls']]
             self.current_pos_cm = prev_state['current_pos'][:]
-
+            # ← КРИТИЧНО: Восстанавливаем флаг замкнутости
+            self.room_closed = prev_state.get('room_closed', False)
             # Перерисовываем
             self.canvas.clear()
             self.draw_editor()
             return True
         return False
-
+    
     def redo(self):
         """Повторяет отмененное действие"""
         if self.redo_stack:
             # Берем состояние для повтора
             state = self.redo_stack.pop()
             self.undo_stack.append(state)
-
             # Восстанавливаем состояние
             self.walls = [w[:] for w in state['walls']]
             self.current_pos_cm = state['current_pos'][:]
-
+            # ← КРИТИЧНО: Восстанавливаем флаг замкнутости
+            self.room_closed = state.get('room_closed', False)
             # Перерисовываем
             self.canvas.clear()
             self.draw_editor()
             return True
         return False
-
+    
+    
     def add_wall(self, direction, length_cm):
         """Добавляет стену в указанном направлении"""
-        # Сохраняем текущее состояние перед изменением
+        # ← КРИТИЧНО: Сохраняем состояние ПЕРЕД изменением (только один раз!)
         self.save_state()
-
-        # Очищаем линию-доводчик при добавлении новой стены
+        # ← КРИТИЧНО: Если комната была замкнута, размыкаем её при добавлении стены
+        self.room_closed = False
+        # Очищаем линию-доводчик
         self.closing_line_start = None
         self.closing_line_end = None
         self.closing_line_points = []
-
         x1, y1 = self.current_pos_cm
-
         # Для диагональных направлений корректируем длину
         if direction in ['up_left', 'up_right', 'down_left', 'down_right']:
-            # Делим длину на sqrt(2) для сохранения заданной длины диагонали
             component_length = length_cm / math.sqrt(2)
         else:
             component_length = length_cm
-
         if direction == 'up':
             x2, y2 = x1, y1 + component_length
         elif direction == 'down':
@@ -348,9 +315,8 @@ class GridWidget(Widget):
         elif direction == 'down_right':
             x2, y2 = x1 + component_length, y1 - component_length
         else:
-            self.undo_stack.pop()  # Отменяем сохранение состояния
+            self.undo_stack.pop()
             return
-
         self.walls.append([x1, y1, x2, y2])
         self.current_pos_cm = [x2, y2]
         self.canvas.clear()
@@ -369,28 +335,26 @@ class GridWidget(Widget):
         self.draw_editor()
 
     def add_closing_wall(self):
-        """Добавляет стену, замыкающую комнату (при нажатии на линию-доводчик)"""
+        """Добавляет стену, замыкающую комнату"""
         if len(self.walls) < 3 or not self.closing_line_start or not self.closing_line_end:
             return
-
-        # Сохраняем текущее состояние перед изменением
+        # ← КРИТИЧНО: Сохраняем состояние ПЕРЕД изменением
         self.save_state()
-
         # Добавляем стену от последней точки к первой
-        x1, y1 = self.closing_line_end  # Конец последней стены
-        x2, y2 = self.closing_line_start  # Начало первой стены
-
+        x1, y1 = self.closing_line_end
+        x2, y2 = self.closing_line_start
         self.walls.append([x1, y1, x2, y2])
         self.current_pos_cm = [x2, y2]
-
+        # ← КРИТИЧНО: Помечаем комнату как замкнутую
+        self.room_closed = True
         # Очищаем линию-доводчик
         self.closing_line_start = None
         self.closing_line_end = None
         self.closing_line_points = []
-
         # Перерисовываем
         self.canvas.clear()
         self.draw_editor()
+    
 
     def get_distance(self, touch1, touch2):
         """Расстояние между двумя точками касания"""
@@ -500,12 +464,13 @@ class GridWidget(Widget):
         return f"{int(length_cm):,}".replace(",", " ")
 
     def draw_wall_dimensions(self):
-        """Рисует размеры стен над линиями"""
+        """Рисует размеры стен с адаптивным шрифтом (как в раскладке)"""
         if not self.walls:
             return
 
         from kivy.core.text import Label as CoreLabel
         from kivy.graphics import Color, Rectangle
+        import math
 
         for wall in self.walls:
             x1, y1, x2, y2 = wall
@@ -525,8 +490,20 @@ class GridWidget(Widget):
                 px_x, px_y = self.cm_to_px(text_x, text_y)
                 text = self.format_dimension(length) + " см"
 
-                label = CoreLabel(text=text, font_size=dp(12),
-                                  color=(0, 0, 0, 1))
+                # ← КРИТИЧНО: Адаптивный размер шрифта как в layout_widget.py
+                # Базовый размер = 60 см (как плитка) * масштаб
+                base_font_px = 60 * self.scale
+                # ← Коэффициент (можно настроить)
+                font_size = base_font_px * 0.75
+
+                # ← Ограничения для читаемости (как в раскладке)
+                font_size = max(8, min(30, font_size))
+
+                label = CoreLabel(
+                    text=text,
+                    font_size=font_size,  # ← Адаптивный!
+                    color=(0, 0, 0, 1)
+                )
                 label.refresh()
 
                 padding = 2

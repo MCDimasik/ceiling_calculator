@@ -68,7 +68,7 @@ class RoomEditorScreen(Screen):
             spacing=dp(2),  # ← КРИТИЧНО: отступ между кнопками
             padding=dp(2)   # ← КРИТИЧНО: отступ по краям
         )
-        
+
         # Стрелки (контейнер)
         self.arrows_container = BoxLayout(
             size_hint=(0.35, 1),  # ← Чуть уменьшили ширину
@@ -76,7 +76,7 @@ class RoomEditorScreen(Screen):
             padding=dp(3)
         )
         self.create_arrow_buttons()
-        
+
         # Назад/Вперед
         undo_redo_container = BoxLayout(
             orientation='vertical',
@@ -100,7 +100,7 @@ class RoomEditorScreen(Screen):
         self.btn_redo.bind(on_press=self.redo_action)
         undo_redo_container.add_widget(self.btn_undo)
         undo_redo_container.add_widget(self.btn_redo)
-        
+
         # Действия
         actions_container = BoxLayout(
             orientation='vertical',
@@ -122,11 +122,11 @@ class RoomEditorScreen(Screen):
         btn_exit.bind(on_press=self.exit_editor)
         actions_container.add_widget(btn_layout)
         actions_container.add_widget(btn_exit)
-        
+
         toolbar.add_widget(self.arrows_container)
         toolbar.add_widget(undo_redo_container)
         toolbar.add_widget(actions_container)
-        
+
         return toolbar
 
     def create_scale_panel(self):
@@ -227,12 +227,21 @@ class RoomEditorScreen(Screen):
     def undo_action(self, instance):
         if self.grid_widget.undo():
             self.update_info()
-            self.btn_redo.disabled = False
-            self.btn_redo.background_color = (0.2, 0.6, 1, 1)
+            # Активируем кнопку "Вперед" если есть что восстанавливать
+            if self.grid_widget.redo_stack:
+                self.btn_redo.disabled = False
+                self.btn_redo.background_color = (0.2, 0.6, 1, 1)
+            else:
+                self.btn_redo.disabled = True
+                self.btn_redo.background_color = (0.8, 0.8, 0.8, 1)
 
     def redo_action(self, instance):
         if self.grid_widget.redo():
             self.update_info()
+            # Деактивируем кнопку "Вперед" если стек пуст
+            if not self.grid_widget.redo_stack:
+                self.btn_redo.disabled = True
+                self.btn_redo.background_color = (0.8, 0.8, 0.8, 1)
 
     def zoom_in(self, instance):
         self.grid_widget.scale = min(1.0, self.grid_widget.scale + 0.1)

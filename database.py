@@ -11,6 +11,8 @@ def init_db():
     """Инициализирует базу данных и создает таблицы."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+
+    # Таблица для проектов
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,6 +20,8 @@ def init_db():
         created_at TEXT NOT NULL
     )
     """)
+
+    # Таблица для комнат
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,11 +30,25 @@ def init_db():
         created_at TEXT NOT NULL,
         walls_json TEXT NOT NULL,
         last_position_json TEXT,
-        grid_offset_x INTEGER DEFAULT 0,  -- Новое поле
-        grid_offset_y INTEGER DEFAULT 0,  -- Новое поле
+        grid_offset_x INTEGER DEFAULT 0,
+        grid_offset_y INTEGER DEFAULT 0,
         FOREIGN KEY (project_id) REFERENCES projects (id)
     )
     """)
+
+    # ← КРИТИЧНО: Миграция для старых БД
+    try:
+        cursor.execute(
+            "ALTER TABLE rooms ADD COLUMN grid_offset_x INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Колонка уже существует
+
+    try:
+        cursor.execute(
+            "ALTER TABLE rooms ADD COLUMN grid_offset_y INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Колонка уже существует
+
     conn.commit()
     conn.close()
 

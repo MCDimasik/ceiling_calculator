@@ -5,7 +5,7 @@ from kivy.metrics import dp
 from kivy.core.text import Label as CoreLabel
 from kivy.clock import Clock
 from functools import partial
-from kivy.graphics.stencil_instructions import StencilPush, StencilUse, StencilUnUse, StencilPop
+import math
 
 class LayoutWidget(Widget):
     """Виджет для отображения раскладки 60×60 см"""
@@ -18,6 +18,7 @@ class LayoutWidget(Widget):
     on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
     dragging_enabled = BooleanProperty(True)
     show_dimensions = BooleanProperty(True)
+    show_wall_dimensions = BooleanProperty(True)  # ← НОВОЕ: Размеры стен
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -169,24 +170,120 @@ class LayoutWidget(Widget):
 
     def draw_layout(self):
         self.canvas.clear()
-
+        
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-
+            
             # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-
+            
             # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-
+            
             # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-
-            # 4. Рисуем цифры ТОЛЬКО если включено
+            
+            # ← 4. Рисуем размеры стен (ОТДЕЛЬНЫЙ флаг!)
+            if self.show_wall_dimensions:
+                self.draw_wall_dimensions()
+            
+            # 5. Рисуем цифры ТОЛЬКО если включено
             if self.show_dimensions:
                 self.draw_all_cut_dimensions()
+
+    def draw_wall_dimensions(self):
+        """Рисует размеры стен с отступом 1 метр и поворотом параллельно стене"""
+        if not self.walls:
+            return
+        
+        from kivy.graphics import PushMatrix, PopMatrix, Rotate
+        
+        for wall in self.walls:
+            x1, y1, x2, y2 = wall
+            
+            # Вычисляем длину стены
+            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            
+            # Середина стены
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            
+            # ← Вычисляем угол стены в градусах
+            dx = x2 - x1
+            dy = y2 - y1
+            angle_degrees = math.degrees(math.atan2(dy, dx))
+            
+            # ← Нормализуем угол для читаемости текста
+            if angle_degrees > 90 or angle_degrees < -90:
+                angle_degrees += 180
+            
+            # Нормаль к стене (перпендикуляр для отступа)
+            length_wall = math.sqrt(dx**2 + dy**2)
+            
+            if length_wall > 0:
+                # Нормализованный перпендикуляр
+                nx = -dy / length_wall
+                ny = dx / length_wall
+                
+                # ← Отступ 1 метр (100 см)
+                offset = 100
+                text_x = mid_x + nx * offset
+                text_y = mid_y + ny * offset
+                
+                # Конвертируем в пиксели
+                px_x, px_y = self.cm_to_px(text_x, text_y)
+                
+                # Форматируем текст с пробелом как разделителем тысяч
+                text = f"{int(length):,}".replace(",", " ") + " см"
+                
+                # ← Адаптивный размер шрифта
+                base_font_px = 60 * self.scale
+                font_size = base_font_px * 0.75
+                font_size = max(8, min(30, font_size))
+                
+                # Создаём метку с нормализованным углом
+                label = CoreLabel(
+                    text=text,
+                    font_size=font_size,
+                    color=(0, 0, 0, 1),
+                    angle=angle_degrees  # ← Поворот параллельно стене!
+                )
+                label.refresh()
+                
+                # Полупрозрачный фон для читаемости
+                padding = 4
+                Color(1, 1, 1, 0.85)
+                
+                # Сохраняем матрицу трансформации
+                PushMatrix()
+                
+                # Поворачиваем вокруг центра текста
+                Rotate(
+                    angle=angle_degrees,
+                    origin=(px_x, px_y, 0)
+                )
+                
+                # Рисуем фон (уже повернутый)
+                Rectangle(
+                    pos=(px_x - label.texture.size[0]/2 - padding,
+                         px_y - label.texture.size[1]/2 - padding),
+                    size=(label.texture.size[0] + padding*2,
+                          label.texture.size[1] + padding*2)
+                )
+                
+                # Текст поверх фона
+                Color(0, 0, 0, 1)
+                Rectangle(
+                    texture=label.texture,
+                    pos=(px_x - label.texture.size[0]/2,
+                         px_y - label.texture.size[1]/2),
+                    size=label.texture.size
+                )
+                
+                # Восстанавливаем матрицу
+                PopMatrix()
 
     def draw_all_cut_dimensions(self):
         """Рисуем размеры резаных плиток с центрированием и адаптивным масштабированием"""
@@ -268,7 +365,7 @@ class LayoutWidget(Widget):
             )
 
     def draw_room_fill(self):
-        """Правильная заливка внутренней области комнаты для сложных форм"""
+        """Правильная заливка внутренней области комнаты (Mesh вместо Stencil)"""
         if len(self.walls) < 3:
             return
         
@@ -295,21 +392,20 @@ class LayoutWidget(Widget):
             return
         
         with self.canvas:
-            # ← УДАЛИТЬ Stencil, использовать Mesh как в grid_widget.py
             Color(*self.room_color)
             
-            # Создаем Mesh для заливки сложных форм
+            # ← КРИТИЧНО: Используем Mesh с триангуляцией "веером" от первой точки
             vertices = []
             indices = []
             
-            # Используем триангуляцию "веером" от центра масс
-            center_x = sum(screen_points[i] for i in range(0, len(screen_points), 2)) / (len(screen_points) // 2)
-            center_y = sum(screen_points[i] for i in range(1, len(screen_points), 2)) / (len(screen_points) // 2)
+            # Первая точка полигона (якорь)
+            anchor_x = screen_points[0]
+            anchor_y = screen_points[1]
             
-            # Создаем треугольники от центра к каждой паре соседних точек
-            for i in range(0, len(screen_points) - 2, 2):
-                # Центр
-                vertices.extend([center_x, center_y, 0, 0])
+            # Создаем треугольники от первой точки к каждой паре соседних точек
+            for i in range(2, len(screen_points) - 2, 2):
+                # Якорь (первая точка)
+                vertices.extend([anchor_x, anchor_y, 0, 0])
                 # Текущая точка
                 vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
                 # Следующая точка

@@ -1,4 +1,4 @@
-# models.py (изменим класс Room)
+# models.py 
 import json
 from datetime import datetime
 import math
@@ -87,6 +87,43 @@ class CeilingLayout:
         self.room_polygon = self._build_room_polygon()
         self.room_bounds = self.get_room_bounds()
         self.room_area_sqm = 0.0
+        self._area_calculated = False  # ← Флаг для кэширования
+
+    def calculate_room_area(self):
+        """Точный расчет площади комнаты с кэшированием"""
+        # ← КРИТИЧНО: Возвращаем кэшированное значение если уже считали
+        if self._area_calculated and self.room_area_sqm > 0:
+            return self.room_area_sqm * 10000  # Возвращаем в см²
+
+        if not self.room.walls or len(self.room.walls) < 3:
+            return 0
+
+        # Собираем точки полигона комнаты
+        points = []
+        if self.room.walls:
+            points.append((self.room.walls[0][0], self.room.walls[0][1]))
+            for wall in self.room.walls:
+                points.append((wall[2], wall[3]))
+
+        # Замыкаем полигон
+        if points[0] != points[-1]:
+            points.append(points[0])
+
+        # Метод Гаусса для расчета площади полигона
+        area = 0
+        n = len(points) - 1
+        for i in range(n):
+            x1, y1 = points[i]
+            x2, y2 = points[i + 1]
+            area += x1 * y2 - x2 * y1
+
+        area_sqcm = abs(area) / 2
+
+        # ← Кэшируем результат
+        self.room_area_sqm = area_sqcm / 10000.0
+        self._area_calculated = True
+
+        return area_sqcm
 
     def _build_room_polygon(self):
         """Предварительно строит полигон комнаты один раз"""
@@ -345,32 +382,32 @@ class CeilingLayout:
             j = i
         return inside
 
-    def calculate_room_area(self):
-        """Точный расчет площади комнаты методом триангуляции для сложных форм"""
-        # ← КРИТИЧНО: обработка пустой комнаты
-        if not self.room.walls or len(self.room.walls) < 3:
-            return 0
+    # def calculate_room_area(self):
+    #     """Точный расчет площади комнаты методом триангуляции для сложных форм"""
+    #     # ← КРИТИЧНО: обработка пустой комнаты
+    #     if not self.room.walls or len(self.room.walls) < 3:
+    #         return 0
 
-        # Собираем точки полигона комнаты
-        points = []
-        if self.room.walls:
-            points.append((self.room.walls[0][0], self.room.walls[0][1]))
-            for wall in self.room.walls:
-                points.append((wall[2], wall[3]))
+    #     # Собираем точки полигона комнаты
+    #     points = []
+    #     if self.room.walls:
+    #         points.append((self.room.walls[0][0], self.room.walls[0][1]))
+    #         for wall in self.room.walls:
+    #             points.append((wall[2], wall[3]))
 
-        # Замыкаем полигон
-        if points[0] != points[-1]:
-            points.append(points[0])
+    #     # Замыкаем полигон
+    #     if points[0] != points[-1]:
+    #         points.append(points[0])
 
-        # Метод Гаусса для расчета площади полигона
-        area = 0
-        n = len(points) - 1
-        for i in range(n):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            area += x1 * y2 - x2 * y1
+    #     # Метод Гаусса для расчета площади полигона
+    #     area = 0
+    #     n = len(points) - 1
+    #     for i in range(n):
+    #         x1, y1 = points[i]
+    #         x2, y2 = points[i + 1]
+    #         area += x1 * y2 - x2 * y1
 
-        return abs(area) / 2
+    #     return abs(area) / 2
 
     def calculate_statistics(self):
         """Рассчитывает статистику раскладки"""

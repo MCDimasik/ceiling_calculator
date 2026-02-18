@@ -30,542 +30,11 @@ ceiling_calculator/
 │   ├── grid_widget.py
 │   ├── layout_widget.py
 
-================================================================================
-
-
-============================================================
-ФАЙЛ: .github\workflows\build-apk.yml
-============================================================
-
-name: Build Simple Kivy APK
-
-on: workflow_dispatch
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Python 3.8
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.8'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git openjdk-11-jdk python3-dev zlib1g-dev
-    
-    - name: Install Buildozer
-      run: |
-        pip install buildozer==1.4.0
-        pip install cython==0.29.21
-    
-    - name: Create minimal spec
-      run: |
-        if [ ! -f buildozer.spec ]; then
-          echo "[app]" > buildozer.spec
-          echo "title = MyApp" >> buildozer.spec
-          echo "package.name = myapp" >> buildozer.spec
-          echo "package.domain = org.test" >> buildozer.spec
-          echo "source.dir = ." >> buildozer.spec
-          echo "source.include_exts = py,png,jpg,kv" >> buildozer.spec
-          echo "version = 1.0" >> buildozer.spec
-          echo "requirements = python3,kivy==2.0.0" >> buildozer.spec
-          echo "orientation = portrait" >> buildozer.spec
-          echo "android.permissions = INTERNET" >> buildozer.spec
-          echo "android.archs = arm64-v8a" >> buildozer.spec
-          echo "android.api = 30" >> buildozer.spec
-          echo "android.minapi = 21" >> buildozer.spec
-          echo "android.sdk = 30" >> buildozer.spec
-          echo "android.ndk = 21.3.6528147" >> buildozer.spec
-          echo "debug = 1" >> buildozer.spec
-          echo "" >> buildozer.spec
-          echo "[buildozer]" >> buildozer.spec
-          echo "log_level = 2" >> buildozer.spec
-        fi
-    
-    - name: Accept licenses
-      run: |
-        mkdir -p ~/.android/licenses
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/licenses/android-sdk-license
-    
-    - name: Build APK
-      run: |
-        echo "y" | buildozer android debug
-        
-        mkdir -p artifacts
-        cp bin/*.apk artifacts/app.apk 2>/dev/null || true
-    
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-apk
-        path: artifacts/*.apk
 
 ============================================================
 ФАЙЛ: .gitignore
 ============================================================
 
-
-
-============================================================
-ФАЙЛ: buildozer.spec
-============================================================
-
-[app]
-
-# (str) Title of your application
-title = ceiling Calculator beta
-
-# (str) Package name
-package.name = ceiling_calculator_beta
-
-# (str) Package domain (needed for android/ios packaging)
-package.domain = org.test
-
-# (str) Source code where the main.py live
-source.dir = .
-
-# (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
-
-# (list) List of inclusions using pattern matching
-#source.include_patterns = assets/*,images/*.png
-
-# (list) Source files to exclude (let empty to not exclude anything)
-#source.exclude_exts = spec
-
-# (list) List of directory to exclude (let empty to not exclude anything)
-#source.exclude_dirs = tests, bin, venv
-
-# (list) List of exclusions using pattern matching
-# Do not prefix with './'
-#source.exclude_patterns = license,images/*/*.jpg
-
-# (str) Application versioning (method 1)
-version = 0.6
-
-# (str) Application versioning (method 2)
-# version.regex = __version__ = ['"](.*)['"]
-# version.filename = %(source.dir)s/main.py
-
-# (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow
-
-# (str) Custom source folders for requirements
-# Sets custom source for any requirements with recipes
-# requirements.source.kivy = ../../kivy
-
-# (str) Presplash of the application
-#presplash.filename = %(source.dir)s/data/presplash.png
-
-# (str) Icon of the application
-#icon.filename = %(source.dir)s/data/icon.png
-
-# (list) Supported orientations
-# Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
-orientation = portrait
-
-# (list) List of service to declare
-#services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
-
-#
-# OSX Specific
-#
-
-#
-# author = © Copyright Info
-
-# change the major version of python used by the app
-osx.python_version = 3
-
-# Kivy version to use
-osx.kivy_version = 1.9.1
-
-#
-# Android specific
-#
-
-# (bool) Indicate if the application should be fullscreen or not
-fullscreen = 1
-
-# (string) Presplash background color (for android toolchain)
-# Supported formats are: #RRGGBB #AARRGGBB or one of the following names:
-# red, blue, green, black, white, gray, cyan, magenta, yellow, lightgray,
-# darkgray, grey, lightgrey, darkgrey, aqua, fuchsia, lime, maroon, navy,
-# olive, purple, silver, teal.
-#android.presplash_color = #FFFFFF
-
-# (string) Presplash animation using Lottie format.
-# see https://lottiefiles.com/ for examples and https://airbnb.design/lottie/
-# for general documentation.
-# Lottie files can be created using various tools, like Adobe After Effect or Synfig.
-#android.presplash_lottie = "path/to/lottie/file.json"
-
-# (str) Adaptive icon of the application (used if Android API level is 26+ at runtime)
-#icon.adaptive_foreground.filename = %(source.dir)s/data/icon_fg.png
-#icon.adaptive_background.filename = %(source.dir)s/data/icon_bg.png
-
-# (list) Permissions
-# (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
-#android.permissions = android.permission.INTERNET, (name=android.permission.WRITE_EXTERNAL_STORAGE;maxSdkVersion=18)
-
-# (list) features (adds uses-feature -tags to manifest)
-#android.features = android.hardware.usb.host
-
-# (int) Target Android API, should be as high as possible.
-android.api = 31
-
-# (int) Minimum API your APK / AAB will support.
-android.minapi = 21
-
-#android.sdk = 20
-
-# (str) Android NDK version to use
-android.ndk = 25b
-
-# (int) Android NDK API to use. This is the minimum API your app will support, it should usually match android.minapi.
-#android.ndk_api = 21
-
-# (bool) Use --private data storage (True) or --dir public storage (False)
-#android.private_storage = True
-
-# (str) Android NDK directory (if empty, it will be automatically downloaded.)
-#android.ndk_path =
-
-# (str) Android SDK directory (if empty, it will be automatically downloaded.)
-#android.sdk_path =
-
-# (str) ANT directory (if empty, it will be automatically downloaded.)
-#android.ant_path =
-
-# (bool) If True, then skip trying to update the Android sdk
-# This can be useful to avoid excess Internet downloads or save time
-# when an update is due and you just want to test/build your package
-# android.skip_update = False
-
-# (bool) If True, then automatically accept SDK license
-# agreements. This is intended for automation only. If set to False,
-# the default, you will be shown the license when first running
-# buildozer.
-# android.accept_sdk_license = False
-
-# (str) Android entry point, default is ok for Kivy-based app
-#android.entrypoint = org.kivy.android.PythonActivity
-
-# (str) Full name including package path of the Java class that implements Android Activity
-# use that parameter together with android.entrypoint to set custom Java class instead of PythonActivity
-#android.activity_class_name = org.kivy.android.PythonActivity
-
-# (str) Extra xml to write directly inside the <manifest> element of AndroidManifest.xml
-# use that parameter to provide a filename from where to load your custom XML code
-#android.extra_manifest_xml = ./src/android/extra_manifest.xml
-
-# (str) Extra xml to write directly inside the <manifest><application> tag of AndroidManifest.xml
-# use that parameter to provide a filename from where to load your custom XML arguments:
-#android.extra_manifest_application_arguments = ./src/android/extra_manifest_application_arguments.xml
-
-# (str) Full name including package path of the Java class that implements Python Service
-# use that parameter to set custom Java class which extends PythonService
-#android.service_class_name = org.kivy.android.PythonService
-
-# (str) Android app theme, default is ok for Kivy-based app
-# android.apptheme = "@android:style/Theme.NoTitleBar"
-
-# (list) Pattern to whitelist for the whole project
-#android.whitelist =
-
-# (str) Path to a custom whitelist file
-#android.whitelist_src =
-
-# (str) Path to a custom blacklist file
-#android.blacklist_src =
-
-# (list) List of Java .jar files to add to the libs so that pyjnius can access
-# their classes. Don't add jars that you do not need, since extra jars can slow
-# down the build process. Allows wildcards matching, for example:
-# OUYA-ODK/libs/*.jar
-#android.add_jars = foo.jar,bar.jar,path/to/more/*.jar
-
-# (list) List of Java files to add to the android project (can be java or a
-# directory containing the files)
-#android.add_src =
-
-# (list) Android AAR archives to add
-#android.add_aars =
-
-# (list) Put these files or directories in the apk assets directory.
-# Either form may be used, and assets need not be in 'source.include_exts'.
-# 1) android.add_assets = source_asset_relative_path
-# 2) android.add_assets = source_asset_path:destination_asset_relative_path
-#android.add_assets =
-
-# (list) Put these files or directories in the apk res directory.
-# The option may be used in three ways, the value may contain one or zero ':'
-# Some examples:
-# 1) A file to add to resources, legal resource names contain ['a-z','0-9','_']
-# android.add_resources = my_icons/all-inclusive.png:drawable/all_inclusive.png
-# 2) A directory, here  'legal_icons' must contain resources of one kind
-# android.add_resources = legal_icons:drawable
-# 3) A directory, here 'legal_resources' must contain one or more directories, 
-# each of a resource kind:  drawable, xml, etc...
-# android.add_resources = legal_resources
-#android.add_resources =
-
-# (list) Gradle dependencies to add
-#android.gradle_dependencies =
-
-# (bool) Enable AndroidX support. Enable when 'android.gradle_dependencies'
-# contains an 'androidx' package, or any package from Kotlin source.
-# android.enable_androidx requires android.api >= 28
-#android.enable_androidx = True
-
-# (list) add java compile options
-# this can for example be necessary when importing certain java libraries using the 'android.gradle_dependencies' option
-# see https://developer.android.com/studio/write/java8-support for further information
-# android.add_compile_options = "sourceCompatibility = 1.8", "targetCompatibility = 1.8"
-
-# (list) Gradle repositories to add {can be necessary for some android.gradle_dependencies}
-# please enclose in double quotes 
-# e.g. android.gradle_repositories = "maven { url 'https://kotlin.bintray.com/ktor' }"
-#android.add_gradle_repositories =
-
-# (list) packaging options to add 
-# see https://google.github.io/android-gradle-dsl/current/com.android.build.gradle.internal.dsl.PackagingOptions.html
-# can be necessary to solve conflicts in gradle_dependencies
-# please enclose in double quotes 
-# e.g. android.add_packaging_options = "exclude 'META-INF/common.kotlin_module'", "exclude 'META-INF/*.kotlin_module'"
-#android.add_packaging_options =
-
-# (list) Java classes to add as activities to the manifest.
-#android.add_activities = com.example.ExampleActivity
-
-# (str) OUYA Console category. Should be one of GAME or APP
-# If you leave this blank, OUYA support will not be enabled
-#android.ouya.category = GAME
-
-# (str) Filename of OUYA Console icon. It must be a 732x412 png image.
-#android.ouya.icon.filename = %(source.dir)s/data/ouya_icon.png
-
-# (str) XML file to include as an intent filters in <activity> tag
-#android.manifest.intent_filters =
-
-# (list) Copy these files to src/main/res/xml/ (used for example with intent-filters)
-#android.res_xml = PATH_TO_FILE,
-
-# (str) launchMode to set for the main activity
-#android.manifest.launch_mode = standard
-
-# (str) screenOrientation to set for the main activity.
-# Valid values can be found at https://developer.android.com/guide/topics/manifest/activity-element
-#android.manifest.orientation = fullSensor
-
-# (list) Android additional libraries to copy into libs/armeabi
-#android.add_libs_armeabi = libs/android/*.so
-#android.add_libs_armeabi_v7a = libs/android-v7/*.so
-#android.add_libs_arm64_v8a = libs/android-v8/*.so
-#android.add_libs_x86 = libs/android-x86/*.so
-#android.add_libs_mips = libs/android-mips/*.so
-
-# (bool) Indicate whether the screen should stay on
-# Don't forget to add the WAKE_LOCK permission if you set this to True
-#android.wakelock = False
-
-# (list) Android application meta-data to set (key=value format)
-#android.meta_data =
-
-# (list) Android library project to add (will be added in the
-# project.properties automatically.)
-#android.library_references =
-
-# (list) Android shared libraries which will be added to AndroidManifest.xml using <uses-library> tag
-#android.uses_library =
-
-# (str) Android logcat filters to use
-#android.logcat_filters = *:S python:D
-
-# (bool) Android logcat only display log for activity's pid
-#android.logcat_pid_only = False
-
-# (str) Android additional adb arguments
-#android.adb_args = -H host.docker.internal
-
-# (bool) Copy library instead of making a libpymodules.so
-#android.copy_libs = 1
-
-# (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
-# In past, was `android.arch` as we weren't supporting builds for multiple archs at the same time.
-android.archs = arm64-v8a
-
-# (int) overrides automatic versionCode computation (used in build.gradle)
-# this is not the same as app version and should only be edited if you know what you're doing
-# android.numeric_version = 1
-
-# (bool) enables Android auto backup feature (Android API >=23)
-android.allow_backup = True
-
-# (str) XML file for custom backup rules (see official auto backup documentation)
-# android.backup_rules =
-
-# (str) If you need to insert variables into your AndroidManifest.xml file,
-# you can do so with the manifestPlaceholders property.
-# This property takes a map of key-value pairs. (via a string)
-# Usage example : android.manifest_placeholders = [myCustomUrl:\"org.kivy.customurl\"]
-# android.manifest_placeholders = [:]
-
-# (bool) Skip byte compile for .py files
-# android.no-byte-compile-python = False
-
-# (str) The format used to package the app for release mode (aab or apk or aar).
-# android.release_artifact = aab
-
-# (str) The format used to package the app for debug mode (apk or aar).
-# android.debug_artifact = apk
-
-#
-# Python for android (p4a) specific
-#
-
-# (str) python-for-android URL to use for checkout
-#p4a.url =
-
-# (str) python-for-android fork to use in case if p4a.url is not specified, defaults to upstream (kivy)
-#p4a.fork = kivy
-
-# (str) python-for-android branch to use, defaults to master
-p4a.branch = master
-
-# (str) python-for-android specific commit to use, defaults to HEAD, must be within p4a.branch
-#p4a.commit = HEAD
-
-# (str) python-for-android git clone directory (if empty, it will be automatically cloned from github)
-#p4a.source_dir =
-
-# (str) The directory in which python-for-android should look for your own build recipes (if any)
-#p4a.local_recipes =
-
-# (str) Filename to the hook for p4a
-#p4a.hook =
-
-# (str) Bootstrap to use for android builds
-# p4a.bootstrap = sdl2
-
-# (int) port number to specify an explicit --port= p4a argument (eg for bootstrap flask)
-#p4a.port =
-
-# Control passing the --use-setup-py vs --ignore-setup-py to p4a
-# "in the future" --use-setup-py is going to be the default behaviour in p4a, right now it is not
-# Setting this to false will pass --ignore-setup-py, true will pass --use-setup-py
-# NOTE: this is general setuptools integration, having pyproject.toml is enough, no need to generate
-# setup.py if you're using Poetry, but you need to add "toml" to source.include_exts.
-#p4a.setup_py = false
-
-# (str) extra command line arguments to pass when invoking pythonforandroid.toolchain
-#p4a.extra_args =
-
-
-
-#
-# iOS specific
-#
-
-# (str) Path to a custom kivy-ios folder
-#ios.kivy_ios_dir = ../kivy-ios
-# Alternately, specify the URL and branch of a git checkout:
-ios.kivy_ios_url = https://github.com/kivy/kivy-ios
-ios.kivy_ios_branch = master
-
-# Another platform dependency: ios-deploy
-# Uncomment to use a custom checkout
-#ios.ios_deploy_dir = ../ios_deploy
-# Or specify URL and branch
-ios.ios_deploy_url = https://github.com/phonegap/ios-deploy
-ios.ios_deploy_branch = 1.10.0
-
-# (bool) Whether or not to sign the code
-ios.codesign.allowed = false
-
-# (str) Name of the certificate to use for signing the debug version
-# Get a list of available identities: buildozer ios list_identities
-#ios.codesign.debug = "iPhone Developer: <lastname> <firstname> (<hexstring>)"
-
-# (str) The development team to use for signing the debug version
-#ios.codesign.development_team.debug = <hexstring>
-
-# (str) Name of the certificate to use for signing the release version
-#ios.codesign.release = %(ios.codesign.debug)s
-
-# (str) The development team to use for signing the release version
-#ios.codesign.development_team.release = <hexstring>
-
-# (str) URL pointing to .ipa file to be installed
-# This option should be defined along with `display_image_url` and `full_size_image_url` options.
-#ios.manifest.app_url =
-
-# (str) URL pointing to an icon (57x57px) to be displayed during download
-# This option should be defined along with `app_url` and `full_size_image_url` options.
-#ios.manifest.display_image_url =
-
-# (str) URL pointing to a large icon (512x512px) to be used by iTunes
-# This option should be defined along with `app_url` and `display_image_url` options.
-#ios.manifest.full_size_image_url =
-
-
-[buildozer]
-
-# (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
-log_level = 2
-
-# (int) Display warning if buildozer is run as root (0 = False, 1 = True)
-warn_on_root = 1
-
-# (str) Path to build artifact storage, absolute or relative to spec file
-# build_dir = ./.buildozer
-
-# (str) Path to build output (i.e. .apk, .aab, .ipa) storage
-# bin_dir = ./bin
-
-#    -----------------------------------------------------------------------------
-#    List as sections
-#
-#    You can define all the "list" as [section:key].
-#    Each line will be considered as a option to the list.
-#    Let's take [app] / source.exclude_patterns.
-#    Instead of doing:
-#
-#[app]
-#source.exclude_patterns = license,data/audio/*.wav,data/images/original/*
-#
-#    This can be translated into:
-#
-#[app:source.exclude_patterns]
-#license
-#data/audio/*.wav
-#data/images/original/*
-#
-
-
-#    -----------------------------------------------------------------------------
-#    Profiles
-#
-#    You can extend section / key with a profile
-#    For example, you want to deploy a demo version of your application without
-#    HD content. You could first change the title to add "(demo)" in the name
-#    and extend the excluded directories to remove the HD content.
-#
-#[app@demo]
-#title = My Application (demo)
-#
-#[app:source.exclude_patterns@demo]
-#images/hd/*
-#
-#    Then, invoke the command line with the "demo" profile:
-#
-#buildozer --profile demo android debug
 
 ============================================================
 ФАЙЛ: database.py
@@ -584,6 +53,8 @@ def init_db():
     """Инициализирует базу данных и создает таблицы."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+
+    # Таблица для проектов
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -591,6 +62,8 @@ def init_db():
         created_at TEXT NOT NULL
     )
     """)
+
+    # Таблица для комнат
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -599,11 +72,25 @@ def init_db():
         created_at TEXT NOT NULL,
         walls_json TEXT NOT NULL,
         last_position_json TEXT,
-        grid_offset_x INTEGER DEFAULT 0,  -- Новое поле
-        grid_offset_y INTEGER DEFAULT 0,  -- Новое поле
+        grid_offset_x INTEGER DEFAULT 0,
+        grid_offset_y INTEGER DEFAULT 0,
         FOREIGN KEY (project_id) REFERENCES projects (id)
     )
     """)
+
+    # ← КРИТИЧНО: Миграция для старых БД
+    try:
+        cursor.execute(
+            "ALTER TABLE rooms ADD COLUMN grid_offset_x INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Колонка уже существует
+
+    try:
+        cursor.execute(
+            "ALTER TABLE rooms ADD COLUMN grid_offset_y INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Колонка уже существует
+
     conn.commit()
     conn.close()
 
@@ -660,6 +147,7 @@ def load_project(project_id):
         project.id = row[0]
         project.created_at = datetime.fromisoformat(row[2])
 
+        # ← КРИТИЧНО: Загружаем комнаты с всеми полями
         cursor.execute(
             "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y FROM rooms WHERE project_id = ?", (project_id,))
         for room_row in cursor.fetchall():
@@ -669,16 +157,15 @@ def load_project(project_id):
             room.walls = json.loads(room_row[3])
             if room_row[4]:
                 room.last_position = json.loads(room_row[4])
-            # Новое поле
             room.grid_offset_x = room_row[5] if room_row[5] else 0
-            # Новое поле
             room.grid_offset_y = room_row[6] if room_row[6] else 0
             project.rooms.append(room)
 
-        print(f"Проект '{project.name}' успешно загружен из базы данных.")
+        print(
+            f"Проект '{project.name}' загружен. Комнат: {len(project.rooms)}")
         return project
     except sqlite3.Error as e:
-        print(f"Ошибка при загрузке проекта из базы данных: {e}")
+        print(f"Ошибка при загрузке проекта: {e}")
         return None
     finally:
         conn.close()
@@ -809,7 +296,7 @@ if __name__ == '__main__':
 ФАЙЛ: models.py
 ============================================================
 
-# models.py (изменим класс Room)
+# models.py 
 import json
 from datetime import datetime
 import math
@@ -898,6 +385,43 @@ class CeilingLayout:
         self.room_polygon = self._build_room_polygon()
         self.room_bounds = self.get_room_bounds()
         self.room_area_sqm = 0.0
+        self._area_calculated = False  # ← Флаг для кэширования
+
+    def calculate_room_area(self):
+        """Точный расчет площади комнаты с кэшированием"""
+        # ← КРИТИЧНО: Возвращаем кэшированное значение если уже считали
+        if self._area_calculated and self.room_area_sqm > 0:
+            return self.room_area_sqm * 10000  # Возвращаем в см²
+
+        if not self.room.walls or len(self.room.walls) < 3:
+            return 0
+
+        # Собираем точки полигона комнаты
+        points = []
+        if self.room.walls:
+            points.append((self.room.walls[0][0], self.room.walls[0][1]))
+            for wall in self.room.walls:
+                points.append((wall[2], wall[3]))
+
+        # Замыкаем полигон
+        if points[0] != points[-1]:
+            points.append(points[0])
+
+        # Метод Гаусса для расчета площади полигона
+        area = 0
+        n = len(points) - 1
+        for i in range(n):
+            x1, y1 = points[i]
+            x2, y2 = points[i + 1]
+            area += x1 * y2 - x2 * y1
+
+        area_sqcm = abs(area) / 2
+
+        # ← Кэшируем результат
+        self.room_area_sqm = area_sqcm / 10000.0
+        self._area_calculated = True
+
+        return area_sqcm
 
     def _build_room_polygon(self):
         """Предварительно строит полигон комнаты один раз"""
@@ -1156,32 +680,32 @@ class CeilingLayout:
             j = i
         return inside
 
-    def calculate_room_area(self):
-        """Точный расчет площади комнаты методом триангуляции для сложных форм"""
-        # ← КРИТИЧНО: обработка пустой комнаты
-        if not self.room.walls or len(self.room.walls) < 3:
-            return 0
+    # def calculate_room_area(self):
+    #     """Точный расчет площади комнаты методом триангуляции для сложных форм"""
+    #     # ← КРИТИЧНО: обработка пустой комнаты
+    #     if not self.room.walls or len(self.room.walls) < 3:
+    #         return 0
 
-        # Собираем точки полигона комнаты
-        points = []
-        if self.room.walls:
-            points.append((self.room.walls[0][0], self.room.walls[0][1]))
-            for wall in self.room.walls:
-                points.append((wall[2], wall[3]))
+    #     # Собираем точки полигона комнаты
+    #     points = []
+    #     if self.room.walls:
+    #         points.append((self.room.walls[0][0], self.room.walls[0][1]))
+    #         for wall in self.room.walls:
+    #             points.append((wall[2], wall[3]))
 
-        # Замыкаем полигон
-        if points[0] != points[-1]:
-            points.append(points[0])
+    #     # Замыкаем полигон
+    #     if points[0] != points[-1]:
+    #         points.append(points[0])
 
-        # Метод Гаусса для расчета площади полигона
-        area = 0
-        n = len(points) - 1
-        for i in range(n):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            area += x1 * y2 - x2 * y1
+    #     # Метод Гаусса для расчета площади полигона
+    #     area = 0
+    #     n = len(points) - 1
+    #     for i in range(n):
+    #         x1, y1 = points[i]
+    #         x2, y2 = points[i + 1]
+    #         area += x1 * y2 - x2 * y1
 
-        return abs(area) / 2
+    #     return abs(area) / 2
 
     def calculate_statistics(self):
         """Рассчитывает статистику раскладки"""
@@ -1224,126 +748,6 @@ class CeilingLayout:
         self.grid_offset_y = (self.grid_offset_y + dy) % self.TILE_SIZE
         self.calculate_layout()
 
-============================================================
-ФАЙЛ: repo_to_text.py
-============================================================
-
-import os
-import mimetypes
-from pathlib import Path
-
-
-def is_binary_file(file_path, sample_size=1024):
-    """Проверяет, является ли файл бинарным."""
-    try:
-        with open(file_path, 'rb') as f:
-            sample = f.read(sample_size)
-            if b'\0' in sample:  # Простая эвристика: если есть нулевые байты — скорее всего бинарник
-                return True
-            # Дополнительно: попробуем декодировать как UTF-8
-            try:
-                sample.decode('utf-8')
-                return False
-            except UnicodeDecodeError:
-                return True
-    except Exception:
-        return True  # Если не удалось прочитать — считаем бинарным
-
-
-def should_skip_dir(dir_name):
-    """Возвращает True, если директорию нужно пропустить."""
-    skip_dirs = {
-        '.git', '__pycache__', 'node_modules', 'venv', 'env', '.venv',
-        '.idea', '.vscode', '.DS_Store', 'dist', 'build', 'coverage',
-        '.pytest_cache', '.mypy_cache', '.tox', '.eggs', '*.egg-info',
-        'api_service'
-    }
-    return dir_name in skip_dirs or dir_name.endswith('.egg-info')
-
-
-def should_skip_file(file_name):
-    """Возвращает True, если файл нужно пропустить."""
-    skip_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.exe', '.dll', '.so', '.dylib',
-                       '.zip', '.tar', '.gz', '.rar', '.pdf', '.bin', '.dat', '.log', '.lock', '.txt'}
-    ext = Path(file_name).suffix.lower()
-    return ext in skip_extensions
-
-
-def generate_repo_summary(repo_path, output_file="repo_summary.txt"):
-    repo_path = Path(repo_path).resolve()
-    if not repo_path.exists():
-        raise ValueError(f"Путь не существует: {repo_path}")
-
-    with open(output_file, "w", encoding="utf-8") as out_f:
-        out_f.write(f"РЕПОЗИТОРИЙ: {repo_path}\n")
-        out_f.write("=" * 80 + "\n\n")
-
-        # Сначала соберём дерево структуры
-        tree_lines = []
-        file_list = []
-
-        for root, dirs, files in os.walk(repo_path):
-            # Пропускаем ненужные директории
-            dirs[:] = [d for d in dirs if not should_skip_dir(d)]
-
-            level = root.replace(str(repo_path), '').count(os.sep)
-            indent = '│   ' * (level - 1) + '├── ' if level > 0 else ''
-            tree_lines.append(f"{indent}{os.path.basename(root)}/")
-
-            for file in sorted(files):
-                if should_skip_file(file):
-                    continue
-                file_path = Path(root) / file
-                rel_path = file_path.relative_to(repo_path)
-                file_list.append(file_path)
-
-                file_indent = '│   ' * level + '├── '
-                tree_lines.append(f"{file_indent}{file}")
-
-        # Записываем дерево
-        out_f.write("СТРУКТУРА ПРОЕКТА:\n")
-        out_f.write("-" * 40 + "\n")
-        for line in tree_lines:
-            out_f.write(line + "\n")
-        out_f.write("\n" + "=" * 80 + "\n\n")
-
-        # Теперь записываем содержимое каждого файла
-        for file_path in sorted(file_list):
-            rel_path = file_path.relative_to(repo_path)
-            try:
-                if is_binary_file(file_path):
-                    continue
-
-                out_f.write(f"\n{'='*60}\n")
-                out_f.write(f"ФАЙЛ: {rel_path}\n")
-                out_f.write(f"{'='*60}\n\n")
-
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                    out_f.write(content)
-                    if not content.endswith('\n'):
-                        out_f.write('\n')
-
-            except Exception as e:
-                out_f.write(f"\n[ОШИБКА ПРИ ЧТЕНИИ ФАЙЛА: {e}]\n")
-
-    print(f"✅ Готово! Сводка сохранена в: {output_file}")
-
-
-# === ОСНОВНОЙ ЗАПУСК ===
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Использование: python repo_to_text.py <путь_к_репозиторию> [выходной_файл.txt]")
-        repo_path = input("Введите путь к репозиторию: ").strip()
-    else:
-        repo_path = sys.argv[1]
-
-    output_file = sys.argv[2] if len(sys.argv) > 2 else "repo_summary.txt"
-
-    generate_repo_summary(repo_path, output_file)
-
 
 ============================================================
 ФАЙЛ: screens\__init__.py
@@ -1366,6 +770,7 @@ from kivy.uix.floatlayout import FloatLayout
 from widgets.layout_widget import LayoutWidget
 from models import CeilingLayout
 from database import save_project  # Импортируем функцию сохранения
+from kivy.clock import Clock  # ← ДОБАВИТЬ импорт
 
 
 class LayoutScreen(Screen):
@@ -1376,13 +781,18 @@ class LayoutScreen(Screen):
         self.snap_mode = 0
         self.control_mode = 'grid'
 
+        # ← КРИТИЧНО: Переменные для авто-повтора кнопок
+        self.repeat_event = None
+        self.repeat_dx = 0
+        self.repeat_dy = 0
+
         main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
         self.selected_corner = None
 
         # Панель инструментов
         toolbar = self.create_toolbar()
 
-        # ← КРИТИЧНО: Область с раскладкой с фиксированным size_hint
+        # Область с раскладкой
         self.layout_widget = LayoutWidget(size_hint=(1, 1))
 
         # Панель управления
@@ -1391,13 +801,13 @@ class LayoutScreen(Screen):
         # Панель статистики
         stats_panel = self.create_stats_panel()
 
-        # ← КРИТИЧНО: Собираем в правильный порядок
+        # Собираем в правильный порядок
         main_layout.add_widget(toolbar)
         main_layout.add_widget(self.layout_widget)
         main_layout.add_widget(control_panel)
         main_layout.add_widget(stats_panel)
 
-        # ← КРИТИЧНО: Оборачиваем в FloatLayout для правильного z-ordering
+        # Оборачиваем в FloatLayout для правильного z-ordering
         from kivy.uix.floatlayout import FloatLayout
         overlay = FloatLayout()
         overlay.add_widget(main_layout)
@@ -1411,12 +821,31 @@ class LayoutScreen(Screen):
         # Инвертируем состояние
         self.layout_widget.show_dimensions = not self.layout_widget.show_dimensions
 
-        # Меняем текст кнопки с переносом
+        # Меняем текст кнопки
         if self.layout_widget.show_dimensions:
-            instance.text = 'Скрыть nразмеры'
+            instance.text = 'Скрыть размеры плит'
             instance.background_color = (0.5, 0.5, 0.5, 1)
         else:
-            instance.text = 'Показать nразмеры'
+            instance.text = 'Показать размеры плит'
+            instance.background_color = (0.3, 0.7, 0.3, 1)
+
+        # Перерисовываем
+        self.layout_widget.draw_layout()
+
+    def toggle_wall_dimensions(self, instance):
+        """← НОВОЕ: Переключает отображение размеров стен"""
+        if not hasattr(self, 'layout_widget'):
+            return
+
+        # Инвертируем состояние
+        self.layout_widget.show_wall_dimensions = not self.layout_widget.show_wall_dimensions
+
+        # Меняем текст кнопки
+        if self.layout_widget.show_wall_dimensions:
+            instance.text = 'Скрыть размеры стен'
+            instance.background_color = (0.5, 0.5, 0.5, 1)
+        else:
+            instance.text = 'Показать размеры стен'
             instance.background_color = (0.3, 0.7, 0.3, 1)
 
         # Перерисовываем
@@ -1493,15 +922,15 @@ class LayoutScreen(Screen):
     def create_toolbar(self):
         """Создает панель инструментов с кнопкой режима"""
         toolbar = BoxLayout(
-            size_hint=(1, 0.1),
-            padding=dp(10),
-            spacing=dp(10)
+            size_hint=(1, 0.14),
+            padding=dp(5),
+            spacing=dp(5)  # ← КРИТИЧНО: отступ между кнопками
         )
 
         # Кнопка "Назад"
         btn_back = Button(
             text='Назад',
-            font_size=dp(16),
+            font_size=dp(14),  # ← Чуть меньше шрифт
             size_hint=(0.2, 1),
             background_color=(0.8, 0.8, 0.8, 1)
         )
@@ -1522,7 +951,7 @@ class LayoutScreen(Screen):
 
         # Кнопка режима управления
         self.mode_button = Button(
-            text='Сетка',  # Иконка и текст
+            text='Сетка',
             font_size=dp(14),
             size_hint=(0.25, 1),
             background_color=(0.2, 0.6, 1, 1),
@@ -1551,7 +980,7 @@ class LayoutScreen(Screen):
         """Переключает режим управления"""
         if self.control_mode == 'grid':
             self.control_mode = 'pan_zoom'
-            self.mode_button.text = '👆 Панорама'
+            self.mode_button.text = 'Панорама'
             self.mode_button.background_color = (0.3, 0.7, 0.3, 1)
             # Отключаем перемещение сетки пальцем
             self.layout_widget.dragging_enabled = False
@@ -1580,99 +1009,159 @@ class LayoutScreen(Screen):
                 self.layout_widget.draw_layout()
 
     def create_control_panel(self):
-        """Создает панель управления сеткой с одной строкой кнопок и строкой кнопки переключения размеров"""
+        """Создает панель управления сеткой (2 строки: стрелки + 2 кнопки)"""
         # Основной контейнер с вертикальной ориентацией (2 строки)
         control_panel = BoxLayout(
             orientation='vertical',
-            size_hint=(1, 0.1),  # Увеличена высота до 10% экрана
+            size_hint=(1, 0.1),
             padding=dp(5),
             spacing=dp(5)
         )
 
-        # === СТРОКА 1: кнопки смещения ===
+        # === СТРОКА 1: кнопки смещения (с авто-повтором) ===
         row1 = BoxLayout(
             size_hint=(1, 0.5),
             spacing=dp(5)
         )
 
-        # Кнопки смещения сетки с шагом 1 см
+        # ← КРИТИЧНО: Кнопки с привязкой on_press и on_release для авто-повтора
         btn_left = Button(
             text='<-',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_left.bind(on_press=lambda x: self.move_grid(-1, 0))
+        btn_left.bind(
+            on_press=lambda x: self.start_repeat_move(-1, 0),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_up = Button(
             text='^',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_up.bind(on_press=lambda x: self.move_grid(0, 1))
+        btn_up.bind(
+            on_press=lambda x: self.start_repeat_move(0, 1),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_down = Button(
             text='v',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_down.bind(on_press=lambda x: self.move_grid(0, -1))
+        btn_down.bind(
+            on_press=lambda x: self.start_repeat_move(0, -1),
+            on_release=lambda x: self.stop_repeat_move()
+        )
+
         btn_right = Button(
             text='->',
             font_size=dp(20),
             size_hint=(0.2, 1),
             background_color=(0.3, 0.3, 0.3, 1)
         )
-        btn_right.bind(on_press=lambda x: self.move_grid(1, 0))
+        btn_right.bind(
+            on_press=lambda x: self.start_repeat_move(1, 0),
+            on_release=lambda x: self.stop_repeat_move()
+        )
 
         row1.add_widget(btn_left)
         row1.add_widget(btn_up)
         row1.add_widget(btn_down)
         row1.add_widget(btn_right)
 
-        # === СТРОКА 2: кнопка переключения размеров ===
+        # === СТРОКА 2: ДВЕ кнопки переключения размеров (убрали "Сброс") ===
         row2 = BoxLayout(
-            size_hint=(1, 0.5),
-            padding=(dp(10), 0)
+            size_hint=(1, 0.6),
+            spacing=dp(5),  # ← Отступ между кнопками
         )
 
-        # Кнопка с переносом текста и увеличенной высотой
+        # Кнопка 1: Размеры плиток
         self.toggle_dims_btn = Button(
-            text='Скрыть размеры',  # Перенос через \
-            font_size=dp(14),
-            size_hint=(0.4, 1),
+            text='Скрыть размеры плит',
+            font_size=dp(12),
+            size_hint=(0.5, 1),  # ← 50% ширины
             background_color=(0.5, 0.5, 0.5, 1),
             color=(1, 1, 1, 1),
             halign='center',
             valign='middle'
         )
-        # Настройка переноса текста
         self.toggle_dims_btn.bind(
             size=lambda instance, size: setattr(
                 instance, 'text_size', (size[0] * 0.9, None))
         )
         self.toggle_dims_btn.bind(on_press=self.toggle_dimensions)
+
+        # ← Кнопка 2: Размеры стен
+        self.toggle_wall_dims_btn = Button(
+            text='Скрыть размеры стен',
+            font_size=dp(12),
+            size_hint=(0.5, 1),  # ← 50% ширины
+            background_color=(0.5, 0.5, 0.5, 1),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle'
+        )
+        self.toggle_wall_dims_btn.bind(
+            size=lambda instance, size: setattr(
+                instance, 'text_size', (size[0] * 0.9, None))
+        )
+        self.toggle_wall_dims_btn.bind(on_press=self.toggle_wall_dimensions)
+
         row2.add_widget(self.toggle_dims_btn)
+        row2.add_widget(self.toggle_wall_dims_btn)
 
         # Собираем обе строки в панель
         control_panel.add_widget(row1)
         control_panel.add_widget(row2)
+
         return control_panel
 
-    def create_stats_panel(self):
-        """Создает панель статистики"""
-        stats_panel = BoxLayout(
-            size_hint=(1, 0.05),
-            padding=dp(10)
+    # ← КРИТИЧНО: НОВЫЕ МЕТОДЫ для авто-повтора
+    def start_repeat_move(self, dx, dy):
+        """Запускает авто-повтор смещения сетки"""
+        # Сначала делаем один сдвиг сразу
+        self.move_grid(dx, dy)
+
+        # Сохраняем направление
+        self.repeat_dx = dx
+        self.repeat_dy = dy
+
+        # Параметры скорости
+        initial_delay = 0.3  # 300мс перед первым повтором
+        repeat_interval = 0.1  # 100мс между повторами
+
+        # Планируем первый повтор через задержку
+        from kivy.clock import Clock
+        self.repeat_event = Clock.schedule_once(
+            lambda dt: self._repeat_move_loop(repeat_interval),
+            initial_delay
         )
-        # Изменяем текст на площадь
-        self.stats_label = Label(
-            text='Целых: 0 | Резаных: 0 | Площадь: 0.0 м²',
-            font_size=dp(14),
-            color=(0, 0, 0, 1)
+
+    def _repeat_move_loop(self, interval):
+        """Цикл авто-повтора"""
+        # Делаем сдвиг
+        self.move_grid(self.repeat_dx, self.repeat_dy)
+
+        # Планируем следующий повтор
+        from kivy.clock import Clock
+        self.repeat_event = Clock.schedule_once(
+            lambda dt: self._repeat_move_loop(interval),
+            interval
         )
-        stats_panel.add_widget(self.stats_label)
-        return stats_panel
+
+    def stop_repeat_move(self):
+        """Останавливает авто-повтор"""
+        if self.repeat_event:
+            from kivy.clock import Clock
+            Clock.unschedule(self.repeat_event)
+            self.repeat_event = None
+        self.repeat_dx = 0
+        self.repeat_dy = 0
 
     def move_grid(self, dx, dy):
         """Смещает сетку на dx, dy сантиметров с немедленным отображением"""
@@ -1689,10 +1178,27 @@ class LayoutScreen(Screen):
                 self.ceiling_layout.grid_offset_y = self.layout_widget.grid_offset_y
                 self.ceiling_layout.calculate_layout()
                 self.layout_widget.layout = self.ceiling_layout
-            # КРИТИЧЕСКИ ВАЖНО: вызываем callback вручную для немедленного обновления
-            self.on_grid_moved()
+
+                # Вызываем callback вручную для немедленного обновления
+                self.on_grid_moved()
+
             # Перерисовываем
             self.layout_widget.draw_layout()
+
+    def create_stats_panel(self):
+        """Создает панель статистики"""
+        stats_panel = BoxLayout(
+            size_hint=(1, 0.05),
+            padding=dp(10)
+        )
+        # Изменяем текст на площадь
+        self.stats_label = Label(
+            text='Целых: 0 | Резаных: 0 | Площадь: 0.0 м²',
+            font_size=dp(14),
+            color=(0, 0, 0, 1)
+        )
+        stats_panel.add_widget(self.stats_label)
+        return stats_panel
 
     def reset_grid(self, instance):
         """Сбрасывает смещение сетки к (0, 0)"""
@@ -1715,33 +1221,29 @@ class LayoutScreen(Screen):
 
     def go_back(self, instance):
         """Возврат в редактор"""
-        # Сохраняем текущее смещение сетки в комнату
+        # ← КРИТИЧНО: Сохраняем только если смещение изменилось
         if hasattr(self, 'ceiling_layout') and self.manager.current_room:
-            self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
-            self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
-            from database import save_project
-            save_project(self.manager.current_project)
+            current_room = self.manager.current_room
 
-        # ← Возвращаемся всегда в редактор
+            # Проверяем, изменилось ли смещение
+            old_offset_x = getattr(current_room, 'grid_offset_x', 0)
+            old_offset_y = getattr(current_room, 'grid_offset_y', 0)
+            new_offset_x = self.ceiling_layout.grid_offset_x
+            new_offset_y = self.ceiling_layout.grid_offset_y
+
+            # Сохраняем ТОЛЬКО если значения изменились
+            if old_offset_x != new_offset_x or old_offset_y != new_offset_y:
+                current_room.grid_offset_x = new_offset_x
+                current_room.grid_offset_y = new_offset_y
+                from database import save_project
+                save_project(self.manager.current_project)
+                print(
+                    f"Смещение сетки сохранено: {new_offset_x}×{new_offset_y} см")
+            else:
+                print("Смещение сетки не изменилось, сохранение пропущено")
+
+        # Возвращаемся в редактор
         self.manager.current = 'room_editor'
-
-    # def go_back(self, instance):
-    #     """Возврат — пропускаем редактор если комната имеет стены"""
-    #     # Сохраняем текущее смещение сетки в комнату
-    #     if hasattr(self, 'ceiling_layout') and self.manager.current_room:
-    #         self.manager.current_room.grid_offset_x = self.ceiling_layout.grid_offset_x
-    #         self.manager.current_room.grid_offset_y = self.ceiling_layout.grid_offset_y
-    #         from database import save_project
-    #         save_project(self.manager.current_project)
-
-    #     # ← КРИТИЧНО: Проверяем есть ли стены у комнаты
-    #     current_room = self.manager.current_room
-    #     if current_room and current_room.walls and len(current_room.walls) >= 3:
-    #         # Если комната имеет стены — идем сразу в комнаты
-    #         self.manager.current = 'rooms'
-    #     else:
-    #         # Иначе — в редактор
-    #         self.manager.current = 'room_editor'
 
 ============================================================
 ФАЙЛ: screens\main_screen.py
@@ -1830,6 +1332,7 @@ class MainScreen(Screen):
 ============================================================
 
 # screens/projects_screen.py
+
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -1839,12 +1342,8 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 from kivy.metrics import dp
-from kivy.graphics import Color, Rectangle, Line
 from kivy.clock import Clock
 from database import init_db, load_all_projects, save_project, delete_project, load_project
-# Добавим BoxLayout для компоновки кнопки X
-from kivy.uix.boxlayout import BoxLayout
-# Используем AnchorLayout для позиционирования X
 from kivy.uix.relativelayout import RelativeLayout
 
 
@@ -1867,16 +1366,26 @@ class ProjectsScreen(Screen):
         main_layout.add_widget(toolbar)
         main_layout.add_widget(content_area)
         self.add_widget(main_layout)
+
         self.bind(size=self.on_size)
 
-        # Тестовые данные больше не нужны
+        # ← КРИТИЧНО: Инициализируем пустым списком
         self.projects = []
-        # Отложенная загрузка проектов из БД
+
+        # ← КРИТИЧНО: Убираем загрузку из __init__ - будем грузить только в on_pre_enter
+        # Clock.schedule_once(lambda dt: self.load_projects(), 0.1)  # УДАЛИТЬ ЭТУ СТРОКУ
+
+    def on_pre_enter(self):
+        """← КРИТИЧНО: Загружаем проекты КАЖДЫЙ раз при входе на экран"""
+        # Отменяем предыдущие запланированные загрузки чтобы избежать дублей
+        Clock.unschedule(lambda dt: self.load_projects())
         Clock.schedule_once(lambda dt: self.load_projects(), 0.1)
 
     def on_size(self, *args):
         """Обновляет размеры плиток при изменении размера окна"""
         if hasattr(self, 'projects_container'):
+            # ← КРИТИЧНО: Отменяем предыдущие вызовы чтобы избежать множественных обновлений
+            Clock.unschedule(lambda dt: self.update_projects_grid())
             Clock.schedule_once(lambda dt: self.update_projects_grid(), 0.1)
 
     def create_toolbar(self):
@@ -1909,7 +1418,7 @@ class ProjectsScreen(Screen):
 
         # Кнопка "Добавить проект" с переносом текста
         btn_add = Button(
-            text='+ Новый\nпроект',  # Перенос на новую строку
+            text='+ Новый\nпроект',
             font_size=dp(14),
             size_hint=(0.3, 1),
             background_color=(0.2, 0.6, 1, 1),
@@ -1919,7 +1428,6 @@ class ProjectsScreen(Screen):
         )
         btn_add.bind(on_press=self.show_add_project_dialog)
 
-        # Настраиваем перенос текста для кнопки
         def update_btn_text(instance, size):
             instance.text_size = (size[0] - dp(10), None)
         btn_add.bind(size=update_btn_text)
@@ -1932,7 +1440,6 @@ class ProjectsScreen(Screen):
 
     def create_content_area(self):
         """Создает область с плитками проектов"""
-        # Контейнер для сетки проектов
         self.projects_container = GridLayout(
             cols=2,
             spacing=dp(10),
@@ -1942,7 +1449,6 @@ class ProjectsScreen(Screen):
         self.projects_container.bind(
             minimum_height=self.projects_container.setter('height'))
 
-        # Скролл для контейнера
         scroll = ScrollView()
         scroll.add_widget(self.projects_container)
 
@@ -1950,31 +1456,40 @@ class ProjectsScreen(Screen):
 
     def load_projects(self):
         """Загружает проекты из базы данных"""
+        # ← КРИТИЧНО: Очищаем список перед загрузкой
         self.projects = []
+
         db_projects = load_all_projects()
         if db_projects:
             self.projects = db_projects
-        self.update_projects_grid()  # <-- Вызываем напрямую для немедленного обновления
+
+        # ← КРИТИЧНО: Обновляем сетку
+        self.update_projects_grid()
 
     def update_projects_grid(self):
         """Обновляет сетку проектов"""
-        self.projects_container.clear_widgets()
+        # ← КРИТИЧНО: Очищаем контейнер ПЕРЕД добавлением новых виджетов
+        if hasattr(self, 'projects_container'):
+            self.projects_container.clear_widgets()
 
         # Устанавливаем параметры сетки
-        self.projects_container.cols = 2
-        self.projects_container.spacing = dp(10)
-        self.projects_container.padding = dp(10)
+        if hasattr(self, 'projects_container'):
+            self.projects_container.cols = 2
+            self.projects_container.spacing = dp(10)
+            self.projects_container.padding = dp(10)
 
         # Добавляем плитки проектов
         for project in self.projects:
             project_tile = self.create_project_tile(project)
-            self.projects_container.add_widget(project_tile)
+            if hasattr(self, 'projects_container'):
+                self.projects_container.add_widget(project_tile)
 
-        # Автоматически устанавливаем высоту контейнера на основе содержимого
-        self.projects_container.height = self.projects_container.minimum_height
+        # Автоматически устанавливаем высоту контейнера
+        if hasattr(self, 'projects_container'):
+            self.projects_container.height = self.projects_container.minimum_height
 
         # Если проектов нет
-        if not self.projects:
+        if not self.projects and hasattr(self, 'projects_container'):
             empty_label = Label(
                 text='Нет проектов\nНажмите "+ Новый проект"',
                 font_size=dp(16),
@@ -1999,8 +1514,7 @@ class ProjectsScreen(Screen):
             size=(tile_width, tile_width)
         )
 
-        # Расчет общей площади
-        from database import load_project
+        # ← КРИТИЧНО: Загружаем проект с комнатами для расчета площади
         from models import CeilingLayout
         total_area = 0.0
 
@@ -2010,13 +1524,14 @@ class ProjectsScreen(Screen):
                 try:
                     if room.walls and len(room.walls) >= 3:
                         temp_layout = CeilingLayout(room)
+                        temp_layout.calculate_layout()  # ← Вызываем для расчета площади!
                         total_area += temp_layout.room_area_sqm if hasattr(
                             temp_layout, 'room_area_sqm') else 0.0
                 except Exception as e:
                     print(f"Ошибка расчета площади: {e}")
                     continue
 
-        # ← КРИТИЧНО: правильное форматирование текста
+        # Форматирование текста
         if total_area > 0:
             button_text = f"{project.name}\n{total_area:.1f} м²"
         else:
@@ -2030,9 +1545,8 @@ class ProjectsScreen(Screen):
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), tile_width -
-                       dp(20)),  # ← Оба размера!
-            shorten=False,  # ← Отключаем сокращение
+            text_size=(tile_width - dp(20), tile_width - dp(20)),
+            shorten=False,
             max_lines=2
         )
         tile_button.bind(on_press=lambda instance,
@@ -2059,6 +1573,7 @@ class ProjectsScreen(Screen):
 
         tile_layout.add_widget(tile_button)
         tile_layout.add_widget(delete_container)
+
         return tile_layout
 
     def confirm_delete_project(self, project_id):
@@ -2066,15 +1581,13 @@ class ProjectsScreen(Screen):
         content = BoxLayout(orientation='vertical',
                             spacing=dp(10), padding=dp(10))
         message = Label(text='Вы точно хотите удалить?', font_size=dp(16))
-
         btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.3))
 
         def do_delete(dt):
             success = delete_project(project_id)
             if success:
-                # Перезагрузить список проектов
-                self.load_projects()
-            popup.dismiss()
+                self.load_projects()  # ← Перезагружаем список
+                popup.dismiss()
 
         def cancel_delete(dt):
             popup.dismiss()
@@ -2088,34 +1601,24 @@ class ProjectsScreen(Screen):
 
         btn_layout.add_widget(btn_cancel)
         btn_layout.add_widget(btn_delete)
-
         content.add_widget(message)
         content.add_widget(btn_layout)
 
         popup = Popup(title='Подтверждение удаления',
-                      content=content,
-                      size_hint=(0.6, 0.4))
+                      content=content, size_hint=(0.6, 0.4))
         popup.open()
 
     def show_add_project_dialog(self, instance):
         """Показывает диалог добавления проекта"""
         content = BoxLayout(orientation='vertical',
                             spacing=dp(10), padding=dp(20))
-
         label = Label(text='Название проекта:', font_size=dp(16))
         name_input = TextInput(
-            multiline=False,
-            font_size=dp(18),
-            size_hint=(1, 0.4)
-        )
-
+            multiline=False, font_size=dp(18), size_hint=(1, 0.4))
         btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.4))
 
-        btn_confirm = Button(
-            text='Создать',
-            background_color=(0.2, 0.6, 1, 1),
-            color=(1, 1, 1, 1)
-        )
+        btn_confirm = Button(text='Создать', background_color=(
+            0.2, 0.6, 1, 1), color=(1, 1, 1, 1))
         btn_cancel = Button(text='Отмена')
 
         def create_project(inst):
@@ -2123,12 +1626,8 @@ class ProjectsScreen(Screen):
             if name:
                 from models import Project
                 project = Project(name)
-                # Сохраняем проект в БД
                 save_project(project)
-                # Перезагружаем проекты из БД для получения актуальных данных
-                self.projects = load_all_projects()
-                # Обновляем сетку
-                self.update_projects_grid()
+                self.load_projects()  # ← Перезагружаем список
                 popup.dismiss()
 
         btn_confirm.bind(on_press=create_project)
@@ -2136,23 +1635,17 @@ class ProjectsScreen(Screen):
 
         btn_layout.add_widget(btn_cancel)
         btn_layout.add_widget(btn_confirm)
-
         content.add_widget(label)
         content.add_widget(name_input)
         content.add_widget(btn_layout)
 
-        popup = Popup(
-            title='Новый проект',
-            content=content,
-            size_hint=(0.8, 0.4)
-        )
+        popup = Popup(title='Новый проект',
+                      content=content, size_hint=(0.8, 0.4))
         popup.open()
 
     def open_project(self, project):
         """Открывает проект (переход к экрану комнат)"""
-        # Сохраняем текущий проект в менеджере экранов
         self.manager.current_project = project
-        # Переходим к экрану комнат
         self.manager.current = 'rooms'
 
     def go_back(self, instance):
@@ -2227,31 +1720,71 @@ class RoomEditorScreen(Screen):
             self.update_info()
 
     def create_toolbar(self):
-        toolbar = BoxLayout(size_hint=(1, 0.08), spacing=dp(5), padding=dp(5))
-        self.arrows_container = BoxLayout(size_hint=(0.4, 1))
+        """Создает панель инструментов"""
+        toolbar = BoxLayout(
+            size_hint=(1, 0.14),
+            spacing=dp(2),  # ← КРИТИЧНО: отступ между кнопками
+            padding=dp(2)   # ← КРИТИЧНО: отступ по краям
+        )
+        
+        # Стрелки (контейнер)
+        self.arrows_container = BoxLayout(
+            size_hint=(0.35, 1),  # ← Чуть уменьшили ширину
+            spacing=dp(3),        # ← Отступ между стрелками
+            padding=dp(3)
+        )
         self.create_arrow_buttons()
+        
+        # Назад/Вперед
         undo_redo_container = BoxLayout(
-            orientation='vertical', size_hint=(0.2, 1), spacing=dp(2))
-        self.btn_undo = Button(text='Назад', font_size=dp(
-            14), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
+            orientation='vertical',
+            size_hint=(0.2, 1),
+            spacing=dp(3),  # ← Отступ между кнопками
+            padding=dp(2)
+        )
+        self.btn_undo = Button(
+            text='Назад',
+            font_size=dp(12),  # ← Чуть меньше шрифт
+            size_hint=(1, 0.5),
+            background_color=(0.8, 0.8, 0.8, 1)
+        )
         self.btn_undo.bind(on_press=self.undo_action)
-        self.btn_redo = Button(text='Вперед', font_size=dp(
-            14), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
+        self.btn_redo = Button(
+            text='Вперед',
+            font_size=dp(12),
+            size_hint=(1, 0.5),
+            background_color=(0.8, 0.8, 0.8, 1)
+        )
         self.btn_redo.bind(on_press=self.redo_action)
         undo_redo_container.add_widget(self.btn_undo)
         undo_redo_container.add_widget(self.btn_redo)
+        
+        # Действия
         actions_container = BoxLayout(
-            orientation='vertical', size_hint=(0.4, 1), spacing=dp(2))
+            orientation='vertical',
+            size_hint=(0.35, 1),  # ← Чуть уменьшили ширину
+            spacing=dp(3),
+            padding=dp(2)
+        )
         btn_layout = Button(
-            text='Раскладка', font_size=dp(14), size_hint=(1, 0.5))
+            text='Раскладка',
+            font_size=dp(12),
+            size_hint=(1, 0.5)
+        )
         btn_layout.bind(on_press=self.show_layout)
-        btn_exit = Button(text='Выход', font_size=dp(14), size_hint=(1, 0.5))
+        btn_exit = Button(
+            text='Выход',
+            font_size=dp(12),
+            size_hint=(1, 0.5)
+        )
         btn_exit.bind(on_press=self.exit_editor)
         actions_container.add_widget(btn_layout)
         actions_container.add_widget(btn_exit)
+        
         toolbar.add_widget(self.arrows_container)
         toolbar.add_widget(undo_redo_container)
         toolbar.add_widget(actions_container)
+        
         return toolbar
 
     def create_scale_panel(self):
@@ -2328,7 +1861,7 @@ class RoomEditorScreen(Screen):
         x, y = self.grid_widget.current_pos_cm
         walls_count = len(self.grid_widget.walls)
 
-        # Расчет площади только если комната замкнута (3+ стены)
+        # ← КРИТИЧНО: Расчет площади только если комната замкнута (3+ стены)
         room_area = 0.0
         if walls_count >= 3:
             try:
@@ -2336,6 +1869,8 @@ class RoomEditorScreen(Screen):
                 temp_room = Room("temp")
                 temp_room.walls = self.grid_widget.walls.copy()
                 temp_layout = CeilingLayout(temp_room)
+                # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                temp_layout.calculate_layout()
                 room_area = temp_layout.room_area_sqm if hasattr(
                     temp_layout, 'room_area_sqm') else 0.0
             except Exception as e:
@@ -2438,24 +1973,29 @@ class RoomsScreen(Screen):
         if hasattr(self.manager, 'current_project') and self.manager.current_project:
             project_id = self.manager.current_project.id
             if project_id:
+                from database import load_project
                 loaded_project = load_project(project_id)
                 if loaded_project:
                     self.manager.current_project = loaded_project
-        # Убираем отложенное обновление здесь, так как оно может создавать гонку состояний
-        self.update_rooms_grid()  # <-- Вызываем напрямую, а не через Clock
+                    # ← КРИТИЧНО: Очищаем кэш площадей в проектах
+                    if hasattr(self.manager, 'current_project') and self.manager.current_project:
+                        for project in getattr(self.manager, '_all_projects', []):
+                            if hasattr(project, '_cached_area'):
+                                delattr(project, '_cached_area')
+                    self.update_rooms_grid()
 
     def create_toolbar(self):
         """Создает панель инструментов"""
         toolbar = BoxLayout(
             size_hint=(1, 0.15),
             padding=dp(10),
-            spacing=dp(10)
+            spacing=dp(10)  # ← КРИТИЧНО: отступ между кнопками
         )
 
         # Кнопка "Назад" к проектам
         btn_back = Button(
             text='← Назад',
-            font_size=dp(16),
+            font_size=dp(14),
             size_hint=(0.3, 1),
             background_color=(0.8, 0.8, 0.8, 1)
         )
@@ -2464,7 +2004,7 @@ class RoomsScreen(Screen):
         # Заголовок (будет обновляться)
         self.title_label = Label(
             text='Комнаты',
-            font_size=dp(18),
+            font_size=dp(16),
             size_hint=(0.4, 1),
             color=(0, 0, 0, 1),
             halign='center',
@@ -2474,8 +2014,8 @@ class RoomsScreen(Screen):
 
         # Кнопка "Добавить комнату" с переносом текста
         btn_add = Button(
-            text='+ Новая\nкомната',  # Перенос на новую строку
-            font_size=dp(14),
+            text='+ Новая\nкомната',
+            font_size=dp(12),
             size_hint=(0.3, 1),
             background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1),
@@ -2519,13 +2059,15 @@ class RoomsScreen(Screen):
         project = self.manager.current_project
         
         if project:
-            # Расчет общей площади для тулбара
+            # ← КРИТИЧНО: Расчет общей площади для тулбара
             from models import CeilingLayout
             total_area = 0.0
             for room in project.rooms:
                 try:
                     if room.walls and len(room.walls) >= 3:
                         temp_layout = CeilingLayout(room)
+                        # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                        temp_layout.calculate_layout()
                         total_area += temp_layout.room_area_sqm if hasattr(temp_layout, 'room_area_sqm') else 0.0
                 except Exception as e:
                     print(f"Ошибка расчета площади: {e}")
@@ -2586,6 +2128,8 @@ class RoomsScreen(Screen):
         if room.walls and len(room.walls) >= 3:
             try:
                 temp_layout = CeilingLayout(room)
+                # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
+                temp_layout.calculate_layout()
                 room_area = temp_layout.room_area_sqm if hasattr(temp_layout, 'room_area_sqm') else 0.0
             except Exception as e:
                 print(f"Ошибка расчета площади: {e}")
@@ -2605,7 +2149,7 @@ class RoomsScreen(Screen):
             color=(0, 0, 0, 1),
             halign='center',
             valign='middle',
-            text_size=(tile_width - dp(20), tile_width - dp(20)),  # ← Оба размера!
+            text_size=(tile_width - dp(20), tile_width - dp(20)),
             shorten=False,
             max_lines=2
         )
@@ -2960,7 +2504,7 @@ class GridWidget(Widget):
         return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
     def draw_room_fill(self):
-        """Правильная заливка внутренней области комнаты"""
+        """Правильная заливка внутренней области комнаты (Mesh вместо Stencil)"""
         if len(self.walls) < 3:
             return
 
@@ -2972,51 +2516,52 @@ class GridWidget(Widget):
             # Конечные точки всех стен
             for wall in self.walls:
                 points.append((wall[2], wall[3]))
+
             # Если комната не замкнута, замыкаем полигон
             if points[-1] != points[0]:
                 points.append(points[0])
 
-        # Проверяем, достаточно ли точек для заливки
-        if len(points) < 4:
-            return
+            # Проверяем, достаточно ли точек для заливки
+            if len(points) < 4:
+                return
 
-        # Преобразуем точки в экранные координаты
-        screen_points = []
-        for x, y in points:
-            px = self.cm_to_px(x, y)
-            screen_points.extend([px[0], px[1]])
+            # Преобразуем точки в экранные координаты
+            screen_points = []
+            for x, y in points:
+                px = self.cm_to_px(x, y)
+                screen_points.extend([px[0], px[1]])
 
-        if len(screen_points) < 8:  # Минимум 4 точки для полигона
-            return
+            if len(screen_points) < 8:  # Минимум 4 точки для полигона
+                return
 
-        with self.canvas:
-            # Заливаем полигон цветом комнаты
-            Color(*self.room_color)
+            with self.canvas:
+                # Заливаем полигон цветом комнаты
+                Color(*self.room_color)
 
-            # Создаем Mesh для заливки сложных форм
-            vertices = []
-            indices = []
+                # ← КРИТИЧНО: Используем Mesh с триангуляцией "веером" от первой точки
+                vertices = []
+                indices = []
 
-            # Используем триангуляцию "веером" от центра масс
-            center_x = sum(screen_points[i] for i in range(
-                0, len(screen_points), 2)) / (len(screen_points) // 2)
-            center_y = sum(screen_points[i] for i in range(
-                1, len(screen_points), 2)) / (len(screen_points) // 2)
+                # Первая точка полигона (якорь)
+                anchor_x = screen_points[0]
+                anchor_y = screen_points[1]
 
-            # Создаем треугольники от центра к каждой паре соседних точек
-            for i in range(0, len(screen_points) - 2, 2):
-                # Центр
-                vertices.extend([center_x, center_y, 0, 0])
-                # Текущая точка
-                vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
-                # Следующая точка
-                vertices.extend([screen_points[i+2], screen_points[i+3], 0, 0])
+                # Создаем треугольники от первой точки к каждой паре соседних точек
+                for i in range(2, len(screen_points) - 2, 2):
+                    # Якорь (первая точка)
+                    vertices.extend([anchor_x, anchor_y, 0, 0])
+                    # Текущая точка
+                    vertices.extend(
+                        [screen_points[i], screen_points[i+1], 0, 0])
+                    # Следующая точка
+                    vertices.extend(
+                        [screen_points[i+2], screen_points[i+3], 0, 0])
 
-            # Создаем индексы для треугольников
-            indices = list(range(len(vertices) // 4))
+                # Создаем индексы для треугольников
+                indices = list(range(len(vertices) // 4))
 
-            if vertices:
-                Mesh(vertices=vertices, indices=indices, mode='triangles')
+                if vertices:
+                    Mesh(vertices=vertices, indices=indices, mode='triangles')
 
     def draw_walls(self):
         """Рисует стены комнаты"""
@@ -3283,12 +2828,13 @@ class GridWidget(Widget):
         return f"{int(length_cm):,}".replace(",", " ")
 
     def draw_wall_dimensions(self):
-        """Рисует размеры стен над линиями"""
+        """Рисует размеры стен с адаптивным шрифтом (как в раскладке)"""
         if not self.walls:
             return
 
         from kivy.core.text import Label as CoreLabel
         from kivy.graphics import Color, Rectangle
+        import math
 
         for wall in self.walls:
             x1, y1, x2, y2 = wall
@@ -3308,8 +2854,20 @@ class GridWidget(Widget):
                 px_x, px_y = self.cm_to_px(text_x, text_y)
                 text = self.format_dimension(length) + " см"
 
-                label = CoreLabel(text=text, font_size=dp(12),
-                                  color=(0, 0, 0, 1))
+                # ← КРИТИЧНО: Адаптивный размер шрифта как в layout_widget.py
+                # Базовый размер = 60 см (как плитка) * масштаб
+                base_font_px = 60 * self.scale
+                # ← Коэффициент (можно настроить)
+                font_size = base_font_px * 0.75
+
+                # ← Ограничения для читаемости (как в раскладке)
+                font_size = max(8, min(30, font_size))
+
+                label = CoreLabel(
+                    text=text,
+                    font_size=font_size,  # ← Адаптивный!
+                    color=(0, 0, 0, 1)
+                )
                 label.refresh()
 
                 padding = 2
@@ -3338,11 +2896,9 @@ from kivy.graphics import Color, Line, Rectangle, Mesh
 from kivy.properties import NumericProperty, ObjectProperty, BooleanProperty
 from kivy.metrics import dp
 from kivy.core.text import Label as CoreLabel
-from kivy.graphics import StencilPush
 from kivy.clock import Clock
 from functools import partial
-from kivy.graphics.stencil_instructions import StencilPush, StencilUse, StencilUnUse, StencilPop
-
+import math
 
 class LayoutWidget(Widget):
     """Виджет для отображения раскладки 60×60 см"""
@@ -3355,6 +2911,7 @@ class LayoutWidget(Widget):
     on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
     dragging_enabled = BooleanProperty(True)
     show_dimensions = BooleanProperty(True)
+    show_wall_dimensions = BooleanProperty(True)  # ← НОВОЕ: Размеры стен
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -3506,24 +3063,120 @@ class LayoutWidget(Widget):
 
     def draw_layout(self):
         self.canvas.clear()
-
+        
         with self.canvas:
             # Темный фон
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-
+            
             # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-
+            
             # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-
+            
             # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-
-            # 4. Рисуем цифры ТОЛЬКО если включено
+            
+            # ← 4. Рисуем размеры стен (ОТДЕЛЬНЫЙ флаг!)
+            if self.show_wall_dimensions:
+                self.draw_wall_dimensions()
+            
+            # 5. Рисуем цифры ТОЛЬКО если включено
             if self.show_dimensions:
                 self.draw_all_cut_dimensions()
+
+    def draw_wall_dimensions(self):
+        """Рисует размеры стен с отступом 1 метр и поворотом параллельно стене"""
+        if not self.walls:
+            return
+        
+        from kivy.graphics import PushMatrix, PopMatrix, Rotate
+        
+        for wall in self.walls:
+            x1, y1, x2, y2 = wall
+            
+            # Вычисляем длину стены
+            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            
+            # Середина стены
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            
+            # ← Вычисляем угол стены в градусах
+            dx = x2 - x1
+            dy = y2 - y1
+            angle_degrees = math.degrees(math.atan2(dy, dx))
+            
+            # ← Нормализуем угол для читаемости текста
+            if angle_degrees > 90 or angle_degrees < -90:
+                angle_degrees += 180
+            
+            # Нормаль к стене (перпендикуляр для отступа)
+            length_wall = math.sqrt(dx**2 + dy**2)
+            
+            if length_wall > 0:
+                # Нормализованный перпендикуляр
+                nx = -dy / length_wall
+                ny = dx / length_wall
+                
+                # ← Отступ 1 метр (100 см)
+                offset = 100
+                text_x = mid_x + nx * offset
+                text_y = mid_y + ny * offset
+                
+                # Конвертируем в пиксели
+                px_x, px_y = self.cm_to_px(text_x, text_y)
+                
+                # Форматируем текст с пробелом как разделителем тысяч
+                text = f"{int(length):,}".replace(",", " ") + " см"
+                
+                # ← Адаптивный размер шрифта
+                base_font_px = 60 * self.scale
+                font_size = base_font_px * 0.75
+                font_size = max(8, min(30, font_size))
+                
+                # Создаём метку с нормализованным углом
+                label = CoreLabel(
+                    text=text,
+                    font_size=font_size,
+                    color=(0, 0, 0, 1),
+                    angle=angle_degrees  # ← Поворот параллельно стене!
+                )
+                label.refresh()
+                
+                # Полупрозрачный фон для читаемости
+                padding = 4
+                Color(1, 1, 1, 0.85)
+                
+                # Сохраняем матрицу трансформации
+                PushMatrix()
+                
+                # Поворачиваем вокруг центра текста
+                Rotate(
+                    angle=angle_degrees,
+                    origin=(px_x, px_y, 0)
+                )
+                
+                # Рисуем фон (уже повернутый)
+                Rectangle(
+                    pos=(px_x - label.texture.size[0]/2 - padding,
+                         px_y - label.texture.size[1]/2 - padding),
+                    size=(label.texture.size[0] + padding*2,
+                          label.texture.size[1] + padding*2)
+                )
+                
+                # Текст поверх фона
+                Color(0, 0, 0, 1)
+                Rectangle(
+                    texture=label.texture,
+                    pos=(px_x - label.texture.size[0]/2,
+                         px_y - label.texture.size[1]/2),
+                    size=label.texture.size
+                )
+                
+                # Восстанавливаем матрицу
+                PopMatrix()
 
     def draw_all_cut_dimensions(self):
         """Рисуем размеры резаных плиток с центрированием и адаптивным масштабированием"""
@@ -3605,57 +3258,58 @@ class LayoutWidget(Widget):
             )
 
     def draw_room_fill(self):
-        """Правильная заливка внутренней области комнаты для сложных форм"""
+        """Правильная заливка внутренней области комнаты (Mesh вместо Stencil)"""
         if len(self.walls) < 3:
             return
-
+        
         # Собираем точки в правильном порядке
         points = []
         if self.walls:
             points.append((self.walls[0][0], self.walls[0][1]))
             for wall in self.walls:
                 points.append((wall[2], wall[3]))
-            if points[-1] != points[0]:
-                points.append(points[0])
-
+        
+        if points[-1] != points[0]:
+            points.append(points[0])
+        
         if len(points) < 4:
             return
-
+        
         # Преобразуем точки в экранные координаты
         screen_points = []
         for x, y in points:
             px = self.cm_to_px(x, y)
             screen_points.extend([px[0], px[1]])
-
+        
         if len(screen_points) < 8:
             return
-
+        
         with self.canvas:
-            # Используем stencil для правильной заливки
-            StencilPush()
-            Color(1, 1, 1, 1)
-
-            # Рисуем контур для stencil
-            Line(points=screen_points, close=True, width=1)
-
-            StencilUse()
-
-            # Заливаем ВНУТРЬ контура
             Color(*self.room_color)
-            # Используем больший прямоугольник для гарантии заполнения
-            min_x = min(screen_points[i]
-                        for i in range(0, len(screen_points), 2))
-            max_x = max(screen_points[i]
-                        for i in range(0, len(screen_points), 2))
-            min_y = min(screen_points[i]
-                        for i in range(1, len(screen_points), 2))
-            max_y = max(screen_points[i]
-                        for i in range(1, len(screen_points), 2))
-            Rectangle(pos=(min_x, min_y), size=(max_x-min_x, max_y-min_y))
-
-            StencilUnUse()
-            StencilPop()
-
+            
+            # ← КРИТИЧНО: Используем Mesh с триангуляцией "веером" от первой точки
+            vertices = []
+            indices = []
+            
+            # Первая точка полигона (якорь)
+            anchor_x = screen_points[0]
+            anchor_y = screen_points[1]
+            
+            # Создаем треугольники от первой точки к каждой паре соседних точек
+            for i in range(2, len(screen_points) - 2, 2):
+                # Якорь (первая точка)
+                vertices.extend([anchor_x, anchor_y, 0, 0])
+                # Текущая точка
+                vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
+                # Следующая точка
+                vertices.extend([screen_points[i+2], screen_points[i+3], 0, 0])
+            
+            # Создаем индексы для треугольников
+            indices = list(range(len(vertices) // 4))
+            
+            if vertices:
+                Mesh(vertices=vertices, indices=indices, mode='triangles')
+            
             # Рисуем контур поверх заливки
             Color(*self.wall_color)
             Line(points=screen_points, close=True, width=2)
