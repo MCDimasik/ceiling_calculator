@@ -7,273 +7,264 @@ from kivy.clock import Clock
 from functools import partial
 import math
 
+
 class LayoutWidget(Widget):
     """Виджет для отображения раскладки 60×60 см"""
-
     scale = NumericProperty(0.3)
     offset_x = NumericProperty(0)
     offset_y = NumericProperty(0)
-    grid_offset_x = NumericProperty(0)  # Смещение сетки (0-59 см)
+    grid_offset_x = NumericProperty(0)
     grid_offset_y = NumericProperty(0)
-    on_grid_move = ObjectProperty(None)  # Callback для обновления статистики
+    on_grid_move = ObjectProperty(None)
     dragging_enabled = BooleanProperty(True)
     show_dimensions = BooleanProperty(True)
-    show_wall_dimensions = BooleanProperty(True)  # ← НОВОЕ: Размеры стен
+    show_wall_dimensions = BooleanProperty(True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        # Данные комнаты
         self.walls = []
         self.layout = None
-        self.room_bounds = None  # Границы комнаты
-        self.is_rotated = False  # Флаг поворота
-        self.rotation_angle = 0  # Угол поворота
+        self.room_bounds = None
+        self.is_rotated = False
+        self.rotation_angle = 0
         self.redraw_scheduled = False
         self.last_redraw_time = 0
         self.dragging_enabled = True
-        self.panning = False  # Для режима панорамирования
+        self.panning = False
         self.last_pan_pos = None
-
-        # Для перетаскивания
         self.dragging = False
         self.last_touch_pos = None
-
         self.touches = {}
         self.pinch_start_distance = None
         self.pinch_start_scale = None
         self.pinch_center = None
-
-        # Цвета согласно редактору
-        self.bg_color = (0.12, 0.13, 0.13, 1)      # #1e2022 - темный фон
-        self.wall_color = (0.94, 0.96, 0.98, 1)    # #f0f5f9 - светлые стены
-        # #52616b - серый для заполненной комнаты
+        self.bg_color = (0.12, 0.13, 0.13, 1)
+        self.wall_color = (0.94, 0.96, 0.98, 1)
         self.room_color = (0.32, 0.38, 0.42, 1)
-        self.grid_color = (0.79, 0.84, 0.87, 0.7)  # #c9d6df - цвет сетки
-        self.full_tile_color = (0.9, 0.9, 0.9, 0.3)  # Цвет целых плиток
-        self.cut_tile_color = (0.7, 0.7, 0.7, 0.3)   # Цвет резаных плиток
-        self.text_color = (0.94, 0.96, 0.98, 1)    # #f0f5f9 - цвет текста
-
+        self.grid_color = (0.79, 0.84, 0.87, 0.7)
+        self.full_tile_color = (0.9, 0.9, 0.9, 0.3)
+        self.cut_tile_color = (0.7, 0.7, 0.7, 0.3)
+        self.text_color = (0.94, 0.96, 0.98, 1)
         self.bind(size=self._update_canvas)
 
+    def _polygon_signed_area(self, pts):
+        area = 0.0
+        n = len(pts)
+        for i in range(n):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+        return area / 2.0
+
+    def _is_ccw(self, pts):
+        return self._polygon_signed_area(pts) > 0
+
+    def _point_in_triangle(self, p, a, b, c):
+        px, py = p
+        ax, ay = a
+        bx, by = b
+        cx, cy = c
+        v0x, v0y = cx - ax, cy - ay
+        v1x, v1y = bx - ax, by - ay
+        v2x, v2y = px - ax, py - ay
+        dot00 = v0x * v0x + v0y * v0y
+        dot01 = v0x * v1x + v0y * v1y
+        dot02 = v0x * v2x + v0y * v2y
+        dot11 = v1x * v1x + v1y * v1y
+        dot12 = v1x * v2x + v1y * v2y
+        denom = dot00 * dot11 - dot01 * dot01
+        if abs(denom) < 1e-9:
+            return False
+        inv = 1.0 / denom
+        u = (dot11 * dot02 - dot01 * dot12) * inv
+        v = (dot00 * dot12 - dot01 * dot02) * inv
+        return (u >= 0) and (v >= 0) and (u + v <= 1)
+
+    def _earclip_triangulate(self, pts):
+        if len(pts) < 3:
+            return []
+        idxs = list(range(len(pts)))
+        if not self._is_ccw(pts):
+            idxs.reverse()
+
+        def is_convex(i0, i1, i2):
+            ax, ay = pts[i0]
+            bx, by = pts[i1]
+            cx, cy = pts[i2]
+            return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) > 0
+
+        triangles = []
+        guard = 0
+        while len(idxs) > 3 and guard < 10000:
+            guard += 1
+            ear_found = False
+            for k in range(len(idxs)):
+                i_prev = idxs[(k - 1) % len(idxs)]
+                i_curr = idxs[k]
+                i_next = idxs[(k + 1) % len(idxs)]
+                if not is_convex(i_prev, i_curr, i_next):
+                    continue
+                a = pts[i_prev]
+                b = pts[i_curr]
+                c = pts[i_next]
+                any_inside = False
+                for j in idxs:
+                    if j in (i_prev, i_curr, i_next):
+                        continue
+                    if self._point_in_triangle(pts[j], a, b, c):
+                        any_inside = True
+                        break
+                if any_inside:
+                    continue
+                triangles.append((i_prev, i_curr, i_next))
+                idxs.pop(k)
+                ear_found = True
+                break
+            if not ear_found:
+                return []
+        if len(idxs) == 3:
+            triangles.append((idxs[0], idxs[1], idxs[2]))
+        return triangles
+
     def _update_canvas(self, *args):
-        """Обновляет канвас при изменении размера виджета"""
         try:
             if hasattr(self, 'room_bounds') and self.room_bounds:
-                # Пересчитываем позицию при изменении размера
                 self.center_room()
-
-            if hasattr(self, 'draw_layout'):
-                self.draw_layout()
+                if hasattr(self, 'draw_layout'):
+                    self.draw_layout()
         except Exception as e:
             print(f"Ошибка при обновлении канваса: {e}")
 
     def set_room(self, walls):
-        """Устанавливает стены комнаты и центрирует ее на экране"""
         self.walls = walls
         if not walls:
             return
-
-        # Находим границы комнаты
         all_x = []
         all_y = []
         for wall in walls:
             x1, y1, x2, y2 = wall
             all_x.extend([x1, x2])
             all_y.extend([y1, y2])
-
         if not all_x or not all_y:
             return
-
         self.room_bounds = {
             'min_x': min(all_x), 'max_x': max(all_x),
             'min_y': min(all_y), 'max_y': max(all_y)
         }
-
-        # Центрируем комнату
         self.center_room()
-
-        # Сбрасываем смещение сетки в 0 для правильного начала
         self.grid_offset_x = 0
         self.grid_offset_y = 0
-
         self.draw_layout()
 
     def center_room(self):
-        """Центрирует комнату в рабочей области с учетом тулбаров"""
         if not self.room_bounds:
             return
-
         min_x, max_x = self.room_bounds['min_x'], self.room_bounds['max_x']
         min_y, max_y = self.room_bounds['min_y'], self.room_bounds['max_y']
-
         room_width = max_x - min_x
         room_height = max_y - min_y
-
-        # Защита от нулевых размеров
         if room_width <= 0:
             room_width = 10
         if room_height <= 0:
             room_height = 10
-
-        # Вычисляем масштаб с учетом отступов
-        # Учитываем, что верхний тулбар = 10%, нижние панели = 10% (итого 80% доступно)
-        # 12% сверху (дополнительный отступ для верхнего тулбара)
         padding_top = 0.12
-        padding_bottom = 0.12  # 8% снизу (меньше, чем сверху)
-        padding_sides = 0.10  # 10% с каждой стороны
-
+        padding_bottom = 0.12
+        padding_sides = 0.10
         available_height = self.height * (1 - padding_top - padding_bottom)
         available_width = self.width * (1 - 2 * padding_sides)
-
         scale_x = available_width / room_width if room_width > 0 else 0.3
         scale_y = available_height / room_height if room_height > 0 else 0.3
-
-        # Используем минимальный масштаб для вписывания
         self.scale = min(scale_x, scale_y)
-
-        # Ограничиваем масштаб
         self.scale = max(0.1, min(self.scale, 1.0))
-
-        # Центрируем комнату с учетом отступов
         room_center_x = (min_x + max_x) / 2
         room_center_y = (min_y + max_y) / 2
-
         widget_center_x = self.width / 2
         widget_center_y = self.height / 2
-
         self.offset_x = widget_center_x - room_center_x * self.scale
         self.offset_y = widget_center_y - room_center_y * self.scale
-
-        # Корректируем по Y, чтобы учесть разные отступы сверху и снизу
         bottom_bound = self.offset_y + min_y * self.scale
         top_bound = self.offset_y + max_y * self.scale
-
-        # Устанавливаем минимальные отступы от границ
         min_top_padding = self.height * padding_top
         min_bottom_padding = self.height * padding_bottom
-
-        # Если комната выходит за верхний отступ
         if top_bound > self.height - min_top_padding:
             self.offset_y -= (top_bound - (self.height - min_top_padding))
-
-        # Если комната выходит за нижний отступ
         if bottom_bound < min_bottom_padding:
             self.offset_y += (min_bottom_padding - bottom_bound)
 
     def cm_to_px(self, cm_x, cm_y):
-        """Конвертирует сантиметры в пиксели"""
-        # БЕЗ ПОВОРОТА - просто масштабирование и смещение
         px_x = self.offset_x + cm_x * self.scale
         px_y = self.offset_y + cm_y * self.scale
         return px_x, px_y
 
     def draw_layout(self):
+        from kivy.graphics import StencilPush, StencilUse, StencilUnUse, StencilPop
+
         self.canvas.clear()
-        
         with self.canvas:
-            # Темный фон
+            # Клиппинг по рамке виджета раскладки,
+            # чтобы не перекрывать верх/низ экрана
+            StencilPush()
+            Rectangle(pos=self.pos, size=self.size)
+            StencilUse()
+
             Color(*self.bg_color)
             Rectangle(pos=self.pos, size=self.size)
-            
-            # 1. Рисуем заполнение комнаты
             self.draw_room_fill()
-            
-            # 2. Рисуем плитки сетки 60×60
             self.draw_grid_tiles()
-            
-            # 3. Рисуем стены комнаты поверх
             self.draw_walls()
-            
-            # ← 4. Рисуем размеры стен (ОТДЕЛЬНЫЙ флаг!)
             if self.show_wall_dimensions:
                 self.draw_wall_dimensions()
-            
-            # 5. Рисуем цифры ТОЛЬКО если включено
             if self.show_dimensions:
                 self.draw_all_cut_dimensions()
 
+            StencilUnUse()
+            Rectangle(pos=self.pos, size=self.size)
+            StencilPop()
+
     def draw_wall_dimensions(self):
-        """Рисует размеры стен с отступом 1 метр и поворотом параллельно стене"""
+        """← ИСПРАВЛЕНО: Показываем float с 1 знаком"""
         if not self.walls:
             return
-        
         from kivy.graphics import PushMatrix, PopMatrix, Rotate
-        
         for wall in self.walls:
             x1, y1, x2, y2 = wall
-            
-            # Вычисляем длину стены
             length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-            
-            # Середина стены
             mid_x = (x1 + x2) / 2
             mid_y = (y1 + y2) / 2
-            
-            # ← Вычисляем угол стены в градусах
             dx = x2 - x1
             dy = y2 - y1
             angle_degrees = math.degrees(math.atan2(dy, dx))
-            
-            # ← Нормализуем угол для читаемости текста
             if angle_degrees > 90 or angle_degrees < -90:
                 angle_degrees += 180
-            
-            # Нормаль к стене (перпендикуляр для отступа)
             length_wall = math.sqrt(dx**2 + dy**2)
-            
             if length_wall > 0:
-                # Нормализованный перпендикуляр
                 nx = -dy / length_wall
                 ny = dx / length_wall
-                
-                # ← Отступ 1 метр (100 см)
                 offset = 100
                 text_x = mid_x + nx * offset
                 text_y = mid_y + ny * offset
-                
-                # Конвертируем в пиксели
                 px_x, px_y = self.cm_to_px(text_x, text_y)
-                
-                # Форматируем текст с пробелом как разделителем тысяч
-                text = f"{int(length):,}".replace(",", " ") + " см"
-                
-                # ← Адаптивный размер шрифта
+                # ← ИСПРАВЛЕНО: Показываем float с 1 знаком
+                if length == int(length):
+                    text = f"{int(length):,}".replace(",", " ") + " см"
+                else:
+                    text = f"{length:.1f}".replace(".", ",") + " см"
                 base_font_px = 60 * self.scale
                 font_size = base_font_px * 0.75
                 font_size = max(8, min(30, font_size))
-                
-                # Создаём метку с нормализованным углом
-                label = CoreLabel(
-                    text=text,
-                    font_size=font_size,
-                    color=(0, 0, 0, 1),
-                    angle=angle_degrees  # ← Поворот параллельно стене!
-                )
+                label = CoreLabel(text=text, font_size=font_size, color=(
+                    0, 0, 0, 1), angle=angle_degrees)
                 label.refresh()
-                
-                # Полупрозрачный фон для читаемости
                 padding = 4
                 Color(1, 1, 1, 0.85)
-                
-                # Сохраняем матрицу трансформации
                 PushMatrix()
-                
-                # Поворачиваем вокруг центра текста
-                Rotate(
-                    angle=angle_degrees,
-                    origin=(px_x, px_y, 0)
-                )
-                
-                # Рисуем фон (уже повернутый)
+                Rotate(angle=angle_degrees, origin=(px_x, px_y, 0))
                 Rectangle(
                     pos=(px_x - label.texture.size[0]/2 - padding,
                          px_y - label.texture.size[1]/2 - padding),
                     size=(label.texture.size[0] + padding*2,
                           label.texture.size[1] + padding*2)
                 )
-                
-                # Текст поверх фона
                 Color(0, 0, 0, 1)
                 Rectangle(
                     texture=label.texture,
@@ -281,23 +272,16 @@ class LayoutWidget(Widget):
                          px_y - label.texture.size[1]/2),
                     size=label.texture.size
                 )
-                
-                # Восстанавливаем матрицу
                 PopMatrix()
 
     def draw_all_cut_dimensions(self):
-        """Рисуем размеры резаных плиток с центрированием и адаптивным масштабированием"""
         if not self.layout or not self.layout.tiles:
             return
-
         for tile in self.layout.tiles:
             if tile['type'] != 'cut':
                 continue
-
             remaining_x = tile.get('cut_x', 60.0)
             remaining_y = tile.get('cut_y', 60.0)
-
-            # Показываем только обрезанные стороны
             texts = []
             if remaining_x < 59.5:
                 texts.append(f"{int(round(remaining_x))}")
@@ -305,58 +289,31 @@ class LayoutWidget(Widget):
                 texts.append(f"{int(round(remaining_y))}")
             if not texts:
                 continue
-
             text = f"{texts[0]}×{texts[1]}" if len(texts) == 2 else texts[0]
-
-            # Центр плитки
             x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
             px_center = self.cm_to_px(center_x, center_y)
-
-            # 🔑 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: адаптивный размер шрифта в зависимости от длины текста
-            tile_height_px = 60 * self.scale  # Высота плитки в пикселях
-
-            # Для одиночных цифр — крупнее (70% высоты плитки)
-            # Для двойных цифр ("45×36") — мельче (50% высоты плитки)
-            # Это даёт визуально одинаковое заполнение пространства
+            tile_height_px = 60 * self.scale
             if '×' in text:
-                font_scale = 0.30  # Двойные цифры — меньше шрифт
+                font_scale = 0.30
             else:
-                font_scale = 0.50  # Одиночные цифры — крупнее
-
+                font_scale = 0.50
             font_size = tile_height_px * font_scale
-
-            # Ограничиваем для читаемости и предотвращения перекрытия
-            # 8px минимум, 30px максимум
             font_size = max(8, min(30, font_size))
-
-            # Создаём текст
-            label = CoreLabel(
-                text=text,
-                font_size=font_size,  # ← ЧИСЛО, не строка!
-                color=self.text_color,
-                bold=True
-            )
+            label = CoreLabel(text=text, font_size=font_size,
+                              color=self.text_color, bold=True)
             label.refresh()
-
-            # Центрируем текст
             pos_x = px_center[0] - label.texture.size[0] / 2
             pos_y = px_center[1] - label.texture.size[1] / 2
-
-            # 🔑 УМЕНЬШЕННЫЕ отступы фона (5% вместо 8%) — чтобы не выходил за границы плитки
             padding_x = label.texture.size[0] * 0.05
             padding_y = label.texture.size[1] * 0.05
-
-            # Полупрозрачный фон с минимальными отступами
             Color(0, 0, 0, 0.3)
             Rectangle(
                 pos=(pos_x - padding_x, pos_y - padding_y),
                 size=(label.texture.size[0] + padding_x * 2,
                       label.texture.size[1] + padding_y * 2)
             )
-
-            # Текст поверх фона
             Color(*self.text_color)
             Rectangle(
                 texture=label.texture,
@@ -365,106 +322,95 @@ class LayoutWidget(Widget):
             )
 
     def draw_room_fill(self):
-        """Правильная заливка внутренней области комнаты (Mesh вместо Stencil)"""
+        """Заливка внутренней области комнаты (впуклые тоже)"""
         if len(self.walls) < 3:
             return
-        
-        # Собираем точки в правильном порядке
-        points = []
-        if self.walls:
-            points.append((self.walls[0][0], self.walls[0][1]))
-            for wall in self.walls:
-                points.append((wall[2], wall[3]))
-        
-        if points[-1] != points[0]:
-            points.append(points[0])
-        
-        if len(points) < 4:
-            return
-        
-        # Преобразуем точки в экранные координаты
-        screen_points = []
-        for x, y in points:
-            px = self.cm_to_px(x, y)
-            screen_points.extend([px[0], px[1]])
-        
-        if len(screen_points) < 8:
-            return
-        
-        with self.canvas:
-            Color(*self.room_color)
-            
-            # ← КРИТИЧНО: Используем Mesh с триангуляцией "веером" от первой точки
-            vertices = []
-            indices = []
-            
-            # Первая точка полигона (якорь)
-            anchor_x = screen_points[0]
-            anchor_y = screen_points[1]
-            
-            # Создаем треугольники от первой точки к каждой паре соседних точек
-            for i in range(2, len(screen_points) - 2, 2):
-                # Якорь (первая точка)
-                vertices.extend([anchor_x, anchor_y, 0, 0])
-                # Текущая точка
-                vertices.extend([screen_points[i], screen_points[i+1], 0, 0])
-                # Следующая точка
-                vertices.extend([screen_points[i+2], screen_points[i+3], 0, 0])
-            
-            # Создаем индексы для треугольников
-            indices = list(range(len(vertices) // 4))
-            
-            if vertices:
-                Mesh(vertices=vertices, indices=indices, mode='triangles')
-            
-            # Рисуем контур поверх заливки
-            Color(*self.wall_color)
-            Line(points=screen_points, close=True, width=2)
 
-    def draw_walls(self):
-        """Рисует стены комнаты"""
+        # Собираем точки в порядке обхода
+        # Стены идут последовательно: конец одной стены = начало следующей
+        points = []
         if not self.walls:
             return
+        
+        # Добавляем начальную точку первой стены
+        first_wall = self.walls[0]
+        points.append((first_wall[0], first_wall[1]))
+        
+        # Добавляем конечные точки всех стен
+        for wall in self.walls:
+            points.append((wall[2], wall[3]))
 
+        # Удаляем дубликаты подряд
+        unique_points = []
+        for i, point in enumerate(points):
+            if i == 0 or point != points[i-1]:
+                unique_points.append(point)
+
+        # ← КРИТИЧНО: Убеждаемся, что полигон замкнут
+        if len(unique_points) < 3:
+            return
+        
+        # Если первая и последняя точки не совпадают, замыкаем полигон
+        if unique_points[0] != unique_points[-1]:
+            unique_points.append(unique_points[0])
+
+        if len(unique_points) < 4:  # Минимум 3 точки + замыкающая
+            return
+
+        poly_pts = unique_points[:-1]
+        if len(poly_pts) < 3:
+            return
+
+        screen_pts = []
+        for x, y in poly_pts:
+            px, py = self.cm_to_px(x, y)
+            screen_pts.append((px, py))
+
+        tris = self._earclip_triangulate(screen_pts)
+        if not tris:
+            return
+
+        vertices = []
+        for x, y in screen_pts:
+            vertices.extend([x, y, 0, 0])
+        indices = []
+        for a, b, c in tris:
+            indices.extend([a, b, c])
+
+        with self.canvas:
+            Color(*self.room_color)
+            Mesh(vertices=vertices, indices=indices, mode="triangles")
+
+    def draw_walls(self):
+        if not self.walls:
+            return
         Color(*self.wall_color)
         for wall in self.walls:
             x1, y1, x2, y2 = wall
             px1 = self.cm_to_px(x1, y1)
             px2 = self.cm_to_px(x2, y2)
-
             Line(points=[px1[0], px1[1], px2[0], px2[1]], width=3)
 
     def draw_grid_tiles(self):
-        """Рисует сетку 60×60 в виде плиток (только внутри комнаты)"""
         if not self.layout or not self.layout.tiles:
             return
-
-        # Рисуем заливку плиток
         for tile in self.layout.tiles:
-            # Пропускаем плитки полностью вне комнаты
             if tile['type'] == 'outside':
                 continue
-
-            # Дополнительная проверка для резаных плиток: пропускаем если оба размера меньше 1 см
             if tile['type'] == 'cut':
                 cut_x = tile.get('cut_x', 0)
                 cut_y = tile.get('cut_y', 0)
                 if cut_x < 1.0 and cut_y < 1.0:
                     continue
-
             x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
             px1 = self.cm_to_px(x1, y1)
             px2 = self.cm_to_px(x2, y2)
-
-            # Рисуем заливку плитки
             if tile['type'] == 'full':
                 Color(*self.full_tile_color)
                 Rectangle(pos=px1, size=(px2[0]-px1[0], px2[1]-px1[1]))
-            else:  # cut
+            else:
                 Color(*self.cut_tile_color)
                 Rectangle(pos=px1, size=(px2[0]-px1[0], px2[1]-px1[1]))
-
-        # Рисуем контуры плиток
         Color(*self.grid_color)
         for tile in self.layout.tiles:
             if tile['type'] == 'outside':
@@ -472,59 +418,37 @@ class LayoutWidget(Widget):
             x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
             px1 = self.cm_to_px(x1, y1)
             px2 = self.cm_to_px(x2, y2)
-
-            # Рисуем контур плитки
             Line(rectangle=(px1[0], px1[1], px2[0] -
-                 px1[0], px2[1] - px1[1]), width=1)
-
-    # Добавляем новый метод для расчета процента отходов:
+                 px1[0], px2[1]-px1[1]), width=1)
 
     def schedule_redraw(self):
-        """Планирует перерисовку с задержкой"""
         if not self.redraw_scheduled:
             self.redraw_scheduled = True
-            Clock.schedule_once(self.redraw_now, 0.05)  # 20 FPS
+            Clock.schedule_once(self.redraw_now, 0.05)
 
     def redraw_now(self, dt):
-        """Выполняет перерисовку"""
         self.redraw_scheduled = False
         self.draw_layout()
 
     def move_grid(self, dx_cm, dy_cm):
-        """Смещает сетку на указанное количество см"""
         self.grid_offset_x = (self.grid_offset_x + dx_cm) % 60
         self.grid_offset_y = (self.grid_offset_y + dy_cm) % 60
-
-        # Вызываем callback для обновления статистики
         if self.on_grid_move:
             self.on_grid_move(self.grid_offset_x, self.grid_offset_y)
-
-        # Используем оптимизированную перерисовку
         self.schedule_redraw()
 
     def zoom_at_center(self, zoom_in=True):
-        """Масштабирует относительно центра виджета"""
-        # Запоминаем центр виджета в мировых координатах
         center_world_x = (self.width / 2 - self.offset_x) / self.scale
         center_world_y = (self.height / 2 - self.offset_y) / self.scale
-
-        # Изменяем масштаб
         if zoom_in:
-            # Максимальный масштаб увеличен до 3.0x
             new_scale = min(3.0, self.scale + 0.05)
         else:
             new_scale = max(0.1, self.scale - 0.05)
-
-        # Пересчитываем смещение, чтобы центр остался на месте
         new_offset_x = self.width / 2 - center_world_x * new_scale
         new_offset_y = self.height / 2 - center_world_y * new_scale
-
-        # Применяем изменения
         self.scale = new_scale
         self.offset_x = new_offset_x
         self.offset_y = new_offset_y
-
-        # Обновляем отображение
         self.apply_bounds_protection()
         self.canvas.clear()
         if hasattr(self, 'draw_editor'):
@@ -533,31 +457,22 @@ class LayoutWidget(Widget):
             self.draw_layout()
 
     def apply_bounds_protection(self):
-        """Защищает от выхода комнаты за границы виджета"""
         if not self.room_bounds:
             return
-
         min_x = self.room_bounds['min_x']
         max_x = self.room_bounds['max_x']
         min_y = self.room_bounds['min_y']
         max_y = self.room_bounds['max_y']
-
-        # Рассчитываем границы видимой области
         visible_min_x = (0 - self.offset_x) / self.scale
         visible_max_x = (self.width - self.offset_x) / self.scale
         visible_min_y = (0 - self.offset_y) / self.scale
         visible_max_y = (self.height - self.offset_y) / self.scale
-
-        # Если комната выходит за левую границу
         if max_x < visible_min_x:
             self.offset_x += (visible_min_x - max_x) * self.scale
-        # Если комната выходит за правую границу
         if min_x > visible_max_x:
             self.offset_x -= (min_x - visible_max_x) * self.scale
-        # Если комната выходит за нижнюю границу
         if max_y < visible_min_y:
             self.offset_y += (visible_min_y - max_y) * self.scale
-        # Если комната выходит за верхнюю границу
         if min_y > visible_max_y:
             self.offset_y -= (min_y - visible_max_y) * self.scale
 
@@ -569,7 +484,6 @@ class LayoutWidget(Widget):
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
-            # Колесо мыши (оставляем для десктопа)
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
                     self.scale = max(0.1, self.scale - 0.05)
@@ -577,8 +491,6 @@ class LayoutWidget(Widget):
                     self.scale = min(1.0, self.scale + 0.05)
                 self.draw_layout()
                 return True
-
-            # Начало пинча
             self.touches[touch.id] = touch
             if len(self.touches) == 2:
                 touches = list(self.touches.values())
@@ -587,8 +499,6 @@ class LayoutWidget(Widget):
                 self.pinch_start_scale = self.scale
                 self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
-
-            # Одиночное касание — перетаскивание или перемещение сетки
             if self.dragging_enabled:
                 self.dragging = True
                 self.last_touch_pos = touch.pos
@@ -596,12 +506,10 @@ class LayoutWidget(Widget):
                 self.panning = True
                 self.last_pan_pos = touch.pos
             return True
-
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
         if touch.id in self.touches and len(self.touches) == 2:
-            # Пинч-масштабирование
             touches = list(self.touches.values())
             current_distance = self.get_distance(touches[0], touches[1])
             if self.pinch_start_distance:
@@ -619,25 +527,19 @@ class LayoutWidget(Widget):
                     self.offset_y = self.pinch_center[1] - \
                         old_center_y * self.scale
                     self.draw_layout()
-            return True
-
-        # Обработка перетаскивания (один палец)
+                    return True
         if self.dragging and self.dragging_enabled:
             dx_px = touch.x - self.last_touch_pos[0]
             dy_px = touch.y - self.last_touch_pos[1]
-            # --- ИЗМЕНЕНИЕ ---
-            # Округляем смещение до целых сантиметров перед добавлением
             dx_cm = round(dx_px / self.scale)
             dy_cm = round(dy_px / self.scale)
-            # ---
             self.grid_offset_x += dx_cm
             self.grid_offset_y += dy_cm
             self.last_touch_pos = touch.pos
             if self.on_grid_move:
-                self.on_grid_move()  # Вызов callback для обновления
+                self.on_grid_move()
             self.draw_layout()
             return True
-
         if self.panning and not self.dragging_enabled:
             dx = touch.x - self.last_pan_pos[0]
             dy = touch.y - self.last_pan_pos[1]
@@ -646,7 +548,6 @@ class LayoutWidget(Widget):
             self.last_pan_pos = touch.pos
             self.draw_layout()
             return True
-
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):

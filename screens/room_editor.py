@@ -15,118 +15,70 @@ from database import save_project
 class RoomEditorScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        # Основной контейнер
         main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
-
-        # Панель инструментов (8% высоты)
         toolbar = self.create_toolbar()
-
-        # Область рисования (занимает всё доступное место)
         self.grid_widget = GridWidget(size_hint=(1, 1))
         self.grid_widget.scale = 0.5
-
-        # Панель информации (7% высоты)
+        # Обновляем инфо-панель при ЛЮБОМ изменении геометрии комнаты
+        self.grid_widget.on_change = self.update_info
         info_panel = self.create_info_panel()
-
-        # Собираем основной layout
         main_layout.add_widget(toolbar)
         main_layout.add_widget(self.grid_widget)
         main_layout.add_widget(info_panel)
-
-        # Контейнер для масштабирования (поверх основного)
         scale_panel = self.create_scale_panel()
-
-        # FloatLayout для наложения scale_panel поверх
         overlay = FloatLayout()
         overlay.add_widget(main_layout)
         overlay.add_widget(scale_panel)
-
         self.add_widget(overlay)
         self.update_info()
 
     def on_pre_enter(self):
-        """Вызывается перед входом на экран - загружаем комнату"""
+        """← ИСПРАВЛЕНО: Очищаем undo stack при загрузке НОВОЙ комнаты"""
         current_room = self.manager.current_room
         if current_room:
             self.grid_widget.walls = current_room.walls.copy()
             if current_room.walls:
                 last_wall = current_room.walls[-1]
                 self.grid_widget.current_pos_cm = [last_wall[2], last_wall[3]]
-                if hasattr(current_room, 'last_position') and current_room.last_position:
-                    self.grid_widget.current_pos_cm = current_room.last_position
+            if hasattr(current_room, 'last_position') and current_room.last_position:
+                self.grid_widget.current_pos_cm = current_room.last_position
             else:
                 self.grid_widget.current_pos_cm = [0, 0]
+            # ← КРИТИЧНО: Правильно определяем, закрыта ли комната
+            # Комната закрыта только если первая и последняя точки совпадают
+            self.grid_widget.room_closed = self.grid_widget.is_room_closed() if hasattr(self.grid_widget, 'is_room_closed') else len(current_room.walls) >= 3
+            self.grid_widget.clear_undo_stack()  # ← Теперь создает ОДНО состояние
             self.grid_widget.canvas.clear()
             self.grid_widget.draw_editor()
             self.update_info()
 
     def create_toolbar(self):
-        """Создает панель инструментов"""
-        toolbar = BoxLayout(
-            size_hint=(1, 0.14),
-            spacing=dp(2),  # ← КРИТИЧНО: отступ между кнопками
-            padding=dp(2)   # ← КРИТИЧНО: отступ по краям
-        )
-
-        # Стрелки (контейнер)
+        toolbar = BoxLayout(size_hint=(1, 0.14), spacing=dp(2), padding=dp(2))
         self.arrows_container = BoxLayout(
-            size_hint=(0.35, 1),  # ← Чуть уменьшили ширину
-            spacing=dp(3),        # ← Отступ между стрелками
-            padding=dp(3)
-        )
+            size_hint=(0.35, 1), spacing=dp(3), padding=dp(3))
         self.create_arrow_buttons()
-
-        # Назад/Вперед
         undo_redo_container = BoxLayout(
-            orientation='vertical',
-            size_hint=(0.2, 1),
-            spacing=dp(3),  # ← Отступ между кнопками
-            padding=dp(2)
-        )
-        self.btn_undo = Button(
-            text='Назад',
-            font_size=dp(12),  # ← Чуть меньше шрифт
-            size_hint=(1, 0.5),
-            background_color=(0.8, 0.8, 0.8, 1)
-        )
+            orientation='vertical', size_hint=(0.2, 1), spacing=dp(3), padding=dp(2))
+        self.btn_undo = Button(text='Назад', font_size=dp(
+            12), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
         self.btn_undo.bind(on_press=self.undo_action)
-        self.btn_redo = Button(
-            text='Вперед',
-            font_size=dp(12),
-            size_hint=(1, 0.5),
-            background_color=(0.8, 0.8, 0.8, 1)
-        )
+        self.btn_redo = Button(text='Вперед', font_size=dp(
+            12), size_hint=(1, 0.5), background_color=(0.8, 0.8, 0.8, 1))
         self.btn_redo.bind(on_press=self.redo_action)
         undo_redo_container.add_widget(self.btn_undo)
         undo_redo_container.add_widget(self.btn_redo)
-
-        # Действия
-        actions_container = BoxLayout(
-            orientation='vertical',
-            size_hint=(0.35, 1),  # ← Чуть уменьшили ширину
-            spacing=dp(3),
-            padding=dp(2)
-        )
+        actions_container = BoxLayout(orientation='vertical', size_hint=(
+            0.35, 1), spacing=dp(3), padding=dp(2))
         btn_layout = Button(
-            text='Раскладка',
-            font_size=dp(12),
-            size_hint=(1, 0.5)
-        )
+            text='Раскладка', font_size=dp(12), size_hint=(1, 0.5))
         btn_layout.bind(on_press=self.show_layout)
-        btn_exit = Button(
-            text='Выход',
-            font_size=dp(12),
-            size_hint=(1, 0.5)
-        )
+        btn_exit = Button(text='Выход', font_size=dp(12), size_hint=(1, 0.5))
         btn_exit.bind(on_press=self.exit_editor)
         actions_container.add_widget(btn_layout)
         actions_container.add_widget(btn_exit)
-
         toolbar.add_widget(self.arrows_container)
         toolbar.add_widget(undo_redo_container)
         toolbar.add_widget(actions_container)
-
         return toolbar
 
     def create_scale_panel(self):
@@ -143,10 +95,7 @@ class RoomEditorScreen(Screen):
     def create_info_panel(self):
         info_panel = BoxLayout(size_hint=(1, 0.07), padding=dp(10))
         self.info_label = Label(
-            text='Точка: (0, 0) см | Стены: 0 | Площадь: —',
-            font_size=dp(12),
-            color=(0, 0, 0, 1)
-        )
+            text='Точка: (0, 0) см | Стены: 0 | Площадь: —', font_size=dp(12), color=(0, 0, 0, 1))
         info_panel.add_widget(self.info_label)
         return info_panel
 
@@ -173,15 +122,16 @@ class RoomEditorScreen(Screen):
                             spacing=dp(10), padding=dp(10))
         label = Label(text=f"Длина стены (см) в направлении {direction}:")
         length_input = TextInput(
-            multiline=False, input_filter='int', text='100')
+            multiline=False, input_filter='float', text='')
         btn_layout = BoxLayout(spacing=dp(10))
         btn_confirm = Button(text='Подтвердить')
         btn_cancel = Button(text='Отмена')
 
         def confirm(instance):
             try:
-                length = int(length_input.text)
+                length = float(length_input.text)
                 if length > 0:
+                    length = round(length, 1)
                     self.grid_widget.add_wall(direction, length)
                     self.update_info()
                     popup.dismiss()
@@ -199,11 +149,8 @@ class RoomEditorScreen(Screen):
         popup.open()
 
     def update_info(self):
-        """Обновляет информационную панель с площадью"""
         x, y = self.grid_widget.current_pos_cm
         walls_count = len(self.grid_widget.walls)
-
-        # ← КРИТИЧНО: Расчет площади только если комната замкнута (3+ стены)
         room_area = 0.0
         if walls_count >= 3:
             try:
@@ -211,23 +158,20 @@ class RoomEditorScreen(Screen):
                 temp_room = Room("temp")
                 temp_room.walls = self.grid_widget.walls.copy()
                 temp_layout = CeilingLayout(temp_room)
-                # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
                 temp_layout.calculate_layout()
                 room_area = temp_layout.room_area_sqm if hasattr(
                     temp_layout, 'room_area_sqm') else 0.0
             except Exception as e:
                 print(f"Ошибка расчета площади: {e}")
                 room_area = 0.0
-
         if room_area > 0:
-            self.info_label.text = f'Точка: ({int(x)}, {int(y)}) см | Стены: {walls_count} | Площадь: {room_area:.1f} м²'
+            self.info_label.text = f'Точка: ({x:.1f}, {y:.1f}) см | Стены: {walls_count} | Площадь: {room_area:.1f} м²'
         else:
-            self.info_label.text = f'Точка: ({int(x)}, {int(y)}) см | Стены: {walls_count} | Площадь: —'
+            self.info_label.text = f'Точка: ({x:.1f}, {y:.1f}) см | Стены: {walls_count} | Площадь: —'
 
     def undo_action(self, instance):
         if self.grid_widget.undo():
             self.update_info()
-            # Активируем кнопку "Вперед" если есть что восстанавливать
             if self.grid_widget.redo_stack:
                 self.btn_redo.disabled = False
                 self.btn_redo.background_color = (0.2, 0.6, 1, 1)
@@ -238,7 +182,6 @@ class RoomEditorScreen(Screen):
     def redo_action(self, instance):
         if self.grid_widget.redo():
             self.update_info()
-            # Деактивируем кнопку "Вперед" если стек пуст
             if not self.grid_widget.redo_stack:
                 self.btn_redo.disabled = True
                 self.btn_redo.background_color = (0.8, 0.8, 0.8, 1)
@@ -261,7 +204,7 @@ class RoomEditorScreen(Screen):
             current_room.walls = self.grid_widget.walls.copy()
             current_room.last_position = self.grid_widget.current_pos_cm.copy()
             save_project(self.manager.current_project)
-        self.manager.current = 'layout'
+            self.manager.current = 'layout'
 
     def exit_editor(self, instance):
         current_room = self.manager.current_room
@@ -269,4 +212,4 @@ class RoomEditorScreen(Screen):
             current_room.walls = self.grid_widget.walls.copy()
             current_room.last_position = self.grid_widget.current_pos_cm.copy()
             save_project(self.manager.current_project)
-        self.manager.current = 'rooms'
+            self.manager.current = 'rooms'

@@ -1,4 +1,4 @@
-# models.py 
+# models.py
 import json
 from datetime import datetime
 import math
@@ -87,42 +87,72 @@ class CeilingLayout:
         self.room_polygon = self._build_room_polygon()
         self.room_bounds = self.get_room_bounds()
         self.room_area_sqm = 0.0
-        self._area_calculated = False  # ← Флаг для кэширования
+        self._area_calculated = False
+
+    def reset_area_cache(self):
+        """← НОВОЕ: Сбрасывает кэш площади для пересчета"""
+        self._area_calculated = False
+        self.room_area_sqm = 0.0
 
     def calculate_room_area(self):
-        """Точный расчет площади комнаты с кэшированием"""
-        # ← КРИТИЧНО: Возвращаем кэшированное значение если уже считали
+        """← ИСПРАВЛЕНО: Универсальный расчет площади методом Гаусса для любых полигонов"""
+        # ← КРИТИЧНО: Если кэш сброшен, считаем заново
         if self._area_calculated and self.room_area_sqm > 0:
-            return self.room_area_sqm * 10000  # Возвращаем в см²
+            return self.room_area_sqm * 10000
 
         if not self.room.walls or len(self.room.walls) < 3:
             return 0
 
-        # Собираем точки полигона комнаты
+        # Собираем точки полигона комнаты в правильном порядке
+        # Каждая стена имеет формат [x1, y1, x2, y2]
+        # Стены идут последовательно: конец одной стены = начало следующей
         points = []
-        if self.room.walls:
-            points.append((self.room.walls[0][0], self.room.walls[0][1]))
-            for wall in self.room.walls:
-                points.append((wall[2], wall[3]))
+        if not self.room.walls:
+            return 0
+        
+        # Добавляем начальную точку первой стены
+        first_wall = self.room.walls[0]
+        points.append((first_wall[0], first_wall[1]))
+        
+        # Добавляем конечные точки всех стен (они являются начальными точками следующих стен)
+        for wall in self.room.walls:
+            points.append((wall[2], wall[3]))
 
-        # Замыкаем полигон
-        if points[0] != points[-1]:
-            points.append(points[0])
+        # Удаляем дубликаты подряд
+        unique_points = []
+        for i, point in enumerate(points):
+            if i == 0 or point != points[i-1]:
+                unique_points.append(point)
 
-        # Метод Гаусса для расчета площади полигона
-        area = 0
-        n = len(points) - 1
+        # Замыкаем полигон если нужно (для правильного расчета площади)
+        if len(unique_points) < 3:
+            return 0
+        
+        # ← КРИТИЧНО: Убеждаемся, что полигон замкнут для формулы Гаусса
+        if unique_points[0] != unique_points[-1]:
+            unique_points.append(unique_points[0])
+
+        if len(unique_points) < 4:  # Минимум 3 точки + замыкающая
+            return 0
+
+        # Метод Гаусса (формула шнуровки) - работает для любых полигонов
+        # Формула: area = 0.5 * |Σ(x_i * y_{i+1} - x_{i+1} * y_i)|
+        area = 0.0
+        n = len(unique_points) - 1  # Исключаем замыкающую точку из цикла
         for i in range(n):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
+            x1, y1 = unique_points[i]
+            x2, y2 = unique_points[i + 1]
             area += x1 * y2 - x2 * y1
 
-        area_sqcm = abs(area) / 2
-
-        # ← Кэшируем результат
+        # Берем абсолютное значение и делим на 2
+        area_sqcm = abs(area) / 2.0
+        
+        # ← КРИТИЧНО: Проверка на валидность результата
+        if area_sqcm <= 0:
+            return 0
+        
         self.room_area_sqm = area_sqcm / 10000.0
         self._area_calculated = True
-
         return area_sqcm
 
     def _build_room_polygon(self):
@@ -241,7 +271,7 @@ class CeilingLayout:
         return min(all_x), max(all_x), min(all_y), max(all_y)
 
     def calculate_cut_dimensions(self, x1, y1, x2, y2):
-        """Точный расчет полезных размеров плитки"""
+        """Точный расчет полезных размеров плитки (БЕЗ округления)"""
         all_x = []
         all_y = []
         for wall in self.room.walls:
@@ -278,21 +308,19 @@ class CeilingLayout:
             intersect_y2 = min(y2, room_max_y)
             if intersect_x1 >= intersect_x2 or intersect_y1 >= intersect_y2:
                 return 0.0, 0.0
-            useful_x = round(intersect_x2 - intersect_x1)
-            useful_y = round(intersect_y2 - intersect_y1)
+            # ← ИСПРАВЛЕНО: БЕЗ round()
+            useful_x = intersect_x2 - intersect_x1
+            useful_y = intersect_y2 - intersect_y1
             return max(0.0, min(60.0, useful_x)), max(0.0, min(60.0, useful_y))
         else:
             corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
             corners_inside = [
                 p for p in corners if self.is_point_inside_room(*p)]
-
             if len(corners_inside) == 4:
                 return 60.0, 60.0
-
             center = ((x1 + x2) / 2, (y1 + y2) / 2)
             if not corners_inside and not self.is_point_inside_room(*center):
                 return 0.0, 0.0
-
             intersection_points = []
             for wall in self.room.walls:
                 wx1, wy1, wx2, wy2 = wall
@@ -303,7 +331,6 @@ class CeilingLayout:
                     inter = self.line_intersection(*line, wx1, wy1, wx2, wy2)
                     if inter:
                         intersection_points.append(inter)
-
             inside_points = corners_inside.copy()
             if intersection_points:
                 inside_points.extend(intersection_points)
@@ -316,17 +343,15 @@ class CeilingLayout:
                 for px, py in key_points:
                     if self.is_point_inside_room(px, py):
                         inside_points.append((px, py))
-
             if not inside_points:
                 return 0.0, 0.0
-
             min_x = min(p[0] for p in inside_points)
             max_x = max(p[0] for p in inside_points)
             min_y = min(p[1] for p in inside_points)
             max_y = max(p[1] for p in inside_points)
-
-            useful_x = max(0.0, min(60.0, round(max_x - min_x)))
-            useful_y = max(0.0, min(60.0, round(max_y - min_y)))
+            # ← ИСПРАВЛЕНО: БЕЗ round()
+            useful_x = max(0.0, min(60.0, max_x - min_x))
+            useful_y = max(0.0, min(60.0, max_y - min_y))
             return max(0.1, useful_x), max(0.1, useful_y)
 
     def line_intersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
