@@ -1,6 +1,8 @@
 # screens/rooms_screen.py
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.image import Image
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.gridlayout import GridLayout
@@ -10,10 +12,17 @@ from kivy.uix.textinput import TextInput
 from kivy.metrics import dp
 from kivy.graphics import Color, Rectangle, Line
 from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.utils import platform
+from kivy.app import App
 # Импортируем delete_room_from_project и load_project
 from database import save_project, delete_room_from_project, load_project
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.relativelayout import RelativeLayout
+from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, style_text_input, configure_modal_footer_buttons, make_input_row
+from widgets.ui_components import RoundedButton, RoundedLabel
+from widgets.ui_modal import RoundedModal
+import theme
 
 
 class RoomsScreen(Screen):
@@ -23,7 +32,17 @@ class RoomsScreen(Screen):
         super().__init__(**kwargs)
         self.title_label = None
 
-        main_layout = BoxLayout(orientation='vertical', spacing=dp(2))
+        root = FloatLayout()
+        self._root = root
+        self.bg_photo = Image(source="assets/bg_light.png", allow_stretch=True, keep_ratio=True)
+        self.bg_photo.size_hint = (None, None)
+        self.bg_photo.pos = (0, 0)
+        self.bg_photo.size = root.size
+        self.bg_photo.opacity = 0
+        root.add_widget(self.bg_photo)
+        root.bind(pos=lambda *_: self._layout_bg_cover(), size=lambda *_: self._layout_bg_cover())
+
+        main_layout = BoxLayout(orientation='vertical', spacing=dp(2), size_hint=(1, 1))
 
         # Панель инструментов
         toolbar = self.create_toolbar()
@@ -33,7 +52,8 @@ class RoomsScreen(Screen):
 
         main_layout.add_widget(toolbar)
         main_layout.add_widget(content_area)
-        self.add_widget(main_layout)
+        root.add_widget(main_layout)
+        self.add_widget(root)
         self.bind(size=self.on_size)
 
     def on_size(self, *args):
@@ -43,7 +63,11 @@ class RoomsScreen(Screen):
             Clock.schedule_once(lambda dt: self.update_rooms_grid(), 0.1)
 
     def on_pre_enter(self):
-        """Вызывается перед входом на экран - перезагружаем проект и обновляем сетку."""
+        """Перед входом: только фон. Тяжелую загрузку переносим на on_enter, чтобы не фризило SlideTransition."""
+        self._apply_bg()
+
+    def on_enter(self):
+        # После завершения slide-перехода можно делать тяжелую загрузку/перестройку сетки
         if hasattr(self.manager, 'current_project') and self.manager.current_project:
             project_id = self.manager.current_project.id
             if project_id:
@@ -58,50 +82,83 @@ class RoomsScreen(Screen):
                                 delattr(project, '_cached_area')
                     self.update_rooms_grid()
 
+    def _apply_bg(self):
+        app = App.get_running_app()
+        mode = getattr(app, "theme_mode", theme.THEME_LIGHT)
+        tex = None
+        try:
+            tex = getattr(app, "bg_textures", {}).get(mode)
+        except Exception:
+            tex = None
+        if tex is not None:
+            self.bg_photo.texture = tex
+        self.bg_photo.opacity = 1.0
+        self._layout_bg_cover()
+
+    def _layout_bg_cover(self):
+        tex = getattr(self.bg_photo, "texture", None)
+        if tex is None or tex.width <= 0 or tex.height <= 0:
+            self.bg_photo.pos = self._root.pos
+            self.bg_photo.size = self._root.size
+            return
+        cw, ch = self._root.size
+        if cw <= 0 or ch <= 0:
+            return
+        vw, vh = float(tex.width), float(tex.height)
+        scale = max(cw / vw, ch / vh)
+        w = vw * scale
+        h = vh * scale
+        x = self._root.x + (cw - w) / 2.0
+        y = self._root.y + (ch - h) / 2.0
+        self.bg_photo.pos = (x, y)
+        self.bg_photo.size = (w, h)
+
     def create_toolbar(self):
         """Создает панель инструментов"""
         toolbar = BoxLayout(
-            size_hint=(1, 0.15),
-            padding=dp(10),
-            spacing=dp(10)  # ← КРИТИЧНО: отступ между кнопками
+            size_hint=(1, None),
+            height=dp(72),
+            padding=(dp(12), dp(6)),
+            spacing=dp(10)  # ← отступ между кнопками
         )
 
         # Кнопка "Назад" к проектам
-        btn_back = Button(
-            text='← Назад',
+        btn_back = RoundedButton(
+            text='Назад',
             font_size=dp(14),
-            size_hint=(0.3, 1),
-            background_color=(0.8, 0.8, 0.8, 1)
+            size_hint=(0.35, 1)
         )
+        btn_back.corner_radius = dp(14)
+        apply_btn_style(btn_back, role="secondary")
+        wrap_button_text(btn_back)
         btn_back.bind(on_press=self.go_back)
 
         # Заголовок (будет обновляться)
-        self.title_label = Label(
+        self.title_label = RoundedLabel(
             text='Комнаты',
             font_size=dp(16),
-            size_hint=(0.4, 1),
-            color=(0, 0, 0, 1),
+            size_hint=(0.30, 1),
+            color=COLORS["text"],
             halign='center',
             valign='middle'
         )
+        self.title_label.corner_radius = dp(14)
+        style_title(self.title_label)
         self.title_label.bind(size=self.title_label.setter('text_size'))
 
         # Кнопка "Добавить комнату" с переносом текста
-        btn_add = Button(
-            text='+ Новая\nкомната',
-            font_size=dp(12),
-            size_hint=(0.3, 1),
-            background_color=(0.2, 0.6, 1, 1),
-            color=(1, 1, 1, 1),
+        btn_add = RoundedButton(
+            text='Новая\nкомната',
+            font_size=dp(14),
+            size_hint=(0.35, 1),
             halign='center',
             valign='middle'
         )
+        btn_add.corner_radius = dp(14)
+        apply_btn_style(btn_add, role="surface")
         btn_add.bind(on_press=self.show_add_room_dialog)
 
-        # Настраиваем перенос текста для кнопки
-        def update_btn_text(instance, size):
-            instance.text_size = (size[0] - dp(10), None)
-        btn_add.bind(size=update_btn_text)
+        wrap_button_text(btn_add)
 
         toolbar.add_widget(btn_back)
         toolbar.add_widget(self.title_label)
@@ -174,13 +231,14 @@ class RoomsScreen(Screen):
             # Если комнат нет
             if not project.rooms:
                 empty_label = Label(
-                    text='Нет комнат\nНажмите "+ Новая комната"',
+                    text='Нет комнат\nНажмите "Новая комната"',
                     font_size=dp(16),
                     color=(0.5, 0.5, 0.5, 1),
                     halign='center',
                     valign='middle',
                     size_hint_y=None
                 )
+                empty_label._theme_slot = "muted"
                 empty_label.bind(size=empty_label.setter('text_size'))
                 empty_label.height = self.height * 0.3
                 self.rooms_container.add_widget(empty_label)
@@ -215,18 +273,19 @@ class RoomsScreen(Screen):
         else:
             button_text = room.name
         
-        tile_button = Button(
-            background_color=(0.95, 0.95, 0.95, 1),
+        tile_button = RoundedButton(
             background_normal='',
             text=button_text,
             font_size=dp(16),
-            color=(0, 0, 0, 1),
+            color=COLORS["text"],
             halign='center',
             valign='middle',
             text_size=(tile_width - dp(20), tile_width - dp(20)),
             shorten=False,
             max_lines=2
         )
+        tile_button.corner_radius = dp(18)
+        apply_btn_style(tile_button, role="surface")
         tile_button.bind(on_press=lambda instance, r=room: self.open_room_editor(r))
         
         # Кнопка удаления
@@ -235,15 +294,16 @@ class RoomsScreen(Screen):
             size=(dp(25), dp(25)),
             pos_hint={'right': 1, 'top': 1}
         )
-        delete_button = Button(
+        delete_button = RoundedButton(
             text='X',
             font_size=dp(12),
             size_hint=(1, 1),
-            background_color=(0.8, 0.2, 0.2, 1),
             color=(1, 1, 1, 1),
             halign='center',
             valign='middle'
         )
+        delete_button.corner_radius = dp(10)
+        apply_btn_style(delete_button, role="danger")
         delete_button.bind(on_press=lambda instance, r_id=room.id: self.confirm_delete_room(r_id))
         delete_container.add_widget(delete_button)
         
@@ -264,9 +324,13 @@ class RoomsScreen(Screen):
         """Показывает диалог подтверждения удаления комнаты."""
         content = BoxLayout(orientation='vertical',
                             spacing=dp(10), padding=dp(10))
-        message = Label(text='Вы точно хотите удалить?', font_size=dp(16))
+        from ui_style import style_popup_card
+        style_popup_card(content, radius_dp=18)
+        message = Label(text='Вы точно хотите удалить?', font_size=dp(16), color=COLORS["text"])
 
-        btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.3))
+        btn_layout = BoxLayout(spacing=dp(10))
+
+        modal = None
 
         def do_delete(dt):
             # Найдем комнату в списке объектов и удалим её
@@ -291,53 +355,64 @@ class RoomsScreen(Screen):
                     f"Комната с ID {room_id} удалена из проекта и сохранена в БД.")
                 # Обновляем сетку
                 self.update_rooms_grid()
-                popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
+                if modal:
+                    modal.dismiss()
             else:
                 print(
                     f"Комната с ID {room_id} не найдена в локальном списке проекта для удаления.")
-                popup.dismiss()  # <-- ВАЖНО: добавлено закрытие popup
+                if modal:
+                    modal.dismiss()
 
         def cancel_delete(dt):
-            popup.dismiss()
+            if modal:
+                modal.dismiss()
 
-        btn_delete = Button(text='Удалить', background_color=(
-            0.8, 0.2, 0.2, 1), color=(1, 1, 1, 1))
-        btn_cancel = Button(text='Отмена')
+        btn_delete = RoundedButton(text='Удалить', color=(1, 1, 1, 1))
+        btn_delete.corner_radius = dp(12)
+        apply_btn_style(btn_delete, role="danger")
+        btn_cancel = RoundedButton(text='Отмена')
+        btn_cancel.corner_radius = dp(12)
+        apply_btn_style(btn_cancel, role="secondary")
 
         btn_delete.bind(on_press=do_delete)
         btn_cancel.bind(on_press=cancel_delete)
 
         btn_layout.add_widget(btn_cancel)
         btn_layout.add_widget(btn_delete)
+        configure_modal_footer_buttons(btn_layout, btn_cancel, btn_delete)
 
         content.add_widget(message)
         content.add_widget(btn_layout)
 
-        popup = Popup(title='Подтверждение удаления',
-                      content=content,
-                      size_hint=(0.6, 0.4))
-        popup.open()
+        modal = RoundedModal(content=content, card_size_hint=(0.84, None), card_height_dp=210)
+        modal.open()
 
     def show_add_room_dialog(self, instance):
         """Показывает диалог добавления комнаты"""
         content = BoxLayout(orientation='vertical',
                             spacing=dp(10), padding=dp(20))
 
-        label = Label(text='Название комнаты:', font_size=dp(16))
+        label = Label(text='Название комнаты:', font_size=dp(16), color=COLORS["text"])
         name_input = TextInput(
             multiline=False,
             font_size=dp(18),
-            size_hint=(1, 0.4)
         )
+        style_text_input(name_input)
+        input_row = make_input_row(name_input)
 
-        btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, 0.4))
+        btn_layout = BoxLayout(spacing=dp(10))
 
-        btn_confirm = Button(
+        btn_confirm = RoundedButton(
             text='Создать',
-            background_color=(0.2, 0.6, 1, 1),
             color=(1, 1, 1, 1)
         )
-        btn_cancel = Button(text='Отмена')
+        btn_confirm.corner_radius = dp(12)
+        apply_btn_style(btn_confirm, role="primary")
+        btn_cancel = RoundedButton(text='Отмена')
+        btn_cancel.corner_radius = dp(12)
+        apply_btn_style(btn_cancel, role="secondary")
+
+        modal = None
 
         def create_room(inst):
             name = name_input.text.strip()
@@ -358,24 +433,47 @@ class RoomsScreen(Screen):
 
                 # Обновляем сетку
                 self.update_rooms_grid()
-                popup.dismiss()
+                if modal:
+                    modal.dismiss()
 
         btn_confirm.bind(on_press=create_room)
-        btn_cancel.bind(on_press=lambda x: popup.dismiss())
+        btn_cancel.bind(on_press=lambda x: modal.dismiss() if modal else None)
 
         btn_layout.add_widget(btn_cancel)
         btn_layout.add_widget(btn_confirm)
+        configure_modal_footer_buttons(btn_layout, btn_cancel, btn_confirm)
 
         content.add_widget(label)
-        content.add_widget(name_input)
+        content.add_widget(input_row)
         content.add_widget(btn_layout)
 
-        popup = Popup(
-            title='Новая комната',
-            content=content,
-            size_hint=(0.8, 0.4)
-        )
-        popup.open()
+        modal = RoundedModal(content=content, card_size_hint=(0.88, None), card_height_dp=260)
+
+        def update_popup_position(*args):
+            if platform != 'android':
+                return
+            kb_height = getattr(Window, 'keyboard_height', 0) or 0
+            if kb_height > 0 and name_input.focus:
+                modal.card.pos_hint = {'center_x': 0.5, 'center_y': 0.72}
+            else:
+                modal.card.pos_hint = {'center_x': 0.5, 'center_y': 0.55}
+
+        def on_focus(instance, focused):
+            Clock.schedule_once(lambda dt: update_popup_position(), 0.05)
+
+        def on_popup_open(*args):
+            Window.bind(keyboard_height=update_popup_position)
+            update_popup_position()
+
+        def on_popup_dismiss(*args):
+            try:
+                Window.unbind(keyboard_height=update_popup_position)
+            except Exception:
+                pass
+
+        name_input.bind(focus=on_focus)
+        modal.bind(on_open=on_popup_open, on_dismiss=on_popup_dismiss)
+        modal.open()
 
     def go_back(self, instance):
         """Возврат к проектам"""

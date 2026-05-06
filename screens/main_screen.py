@@ -1,8 +1,15 @@
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.video import Video
+from kivy.uix.image import Image
 from kivy.metrics import dp
+from ui_style import COLORS, apply_btn_style, style_title
+from widgets.ui_components import RoundedButton
+import theme
+from kivy.clock import Clock
+from kivy.resources import resource_find
 
 
 class MainScreen(Screen):
@@ -11,67 +18,212 @@ class MainScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # Основной вертикальный контейнер
-        main_layout = BoxLayout(
-            orientation='vertical',
-            padding=dp(20),
-            spacing=dp(20)
-        )
+        root = FloatLayout()
+        self._root = root
 
-        # Заголовок приложения
-        title = Label(
-            text='Калькулятор потолков',
-            font_size=dp(28),
-            color=(0, 0, 0, 1),
-            size_hint=(1, 0.2),
-            bold=True
+        # Фолбэк-фон (на случай если видео-провайдер недоступен)
+        from kivy.graphics import Color, Rectangle
+        with root.canvas.before:
+            self._main_bg_color_instr = Color(*COLORS["bg"])
+            self._main_bg_rect = Rectangle(pos=root.pos, size=root.size)
+        root.bind(pos=lambda inst, val: setattr(self._main_bg_rect, "pos", val))
+        root.bind(size=lambda inst, val: setattr(self._main_bg_rect, "size", val))
+
+        # Фото-фон (только для светлой темы)
+        self.bg_photo = Image(source="assets/bg_light.png", allow_stretch=True, keep_ratio=True)
+        self.bg_photo.size_hint = (None, None)
+        self.bg_photo.pos = (0, 0)
+        self.bg_photo.size = root.size
+        self.bg_photo.opacity = 1
+        root.add_widget(self.bg_photo)
+        root.bind(pos=lambda *_: self._layout_photo_cover(), size=lambda *_: self._layout_photo_cover())
+
+        # Фоновое видео (под контентом)
+        self.bg_video = Video(
+            source="",
+            state="stop",
+            options={"eos": "loop"},
+            allow_stretch=True,
+            keep_ratio=True,
         )
+        # cover layout: size/pos считаем вручную, чтобы видео закрывало весь экран без искажений
+        self.bg_video.size_hint = (None, None)
+        self.bg_video.pos = (0, 0)
+        self.bg_video.size = root.size
+        # Показываем видео только когда оно реально загрузилось
+        self.bg_video.opacity = 0
+        root.add_widget(self.bg_video)
+        root.bind(pos=lambda *_: self._layout_video_cover(), size=lambda *_: self._layout_video_cover())
+
+        # Основной вертикальный контейнер (поверх видео)
+        main_layout = BoxLayout(
+            orientation="vertical",
+            padding=dp(20),
+            spacing=dp(16),
+            size_hint=(1, 1),
+        )
+        root.add_widget(main_layout)
 
         # Контейнер для кнопок
         buttons_layout = BoxLayout(
             orientation='vertical',
-            spacing=dp(15),
-            size_hint=(1, 0.8)
+            spacing=dp(12),
+            size_hint=(1, None),
+            height=dp(192),
         )
 
         # Кнопка 1: Расчет раскладки потолка
-        btn_calc1 = Button(
+        self.btn_calc1 = RoundedButton(
             text='Расчет раскладки потолка',
-            font_size=dp(18),
-            background_color=(0.2, 0.6, 1, 1),
-            color=(1, 1, 1, 1),
-            size_hint=(1, 0.45)
+            font_size=dp(16),
+            size_hint=(1, None),
+            height=dp(54),
         )
+        self.btn_calc1.corner_radius = dp(18)
+        apply_btn_style(self.btn_calc1, role="surface")
         # Изменено: теперь идем в проекты
-        btn_calc1.bind(on_press=self.go_to_projects)
+        self.btn_calc1.bind(on_press=self.go_to_projects)
 
-        # Кнопка 2: Расчет материалов (заглушка)
-        btn_calc2 = Button(
+        # Кнопка 2: Расчет материалов
+        self.btn_calc2 = RoundedButton(
             text='Расчет материалов',
-            font_size=dp(18),
-            background_color=(0.3, 0.7, 0.3, 1),
-            color=(1, 1, 1, 1),
-            size_hint=(1, 0.45)
+            font_size=dp(16),
+            size_hint=(1, None),
+            height=dp(54),
         )
-        btn_calc2.bind(on_press=self.show_placeholder)
+        self.btn_calc2.corner_radius = dp(18)
+        apply_btn_style(self.btn_calc2, role="surface")
+        self.btn_calc2.bind(on_press=self.go_to_materials)
+
+        self.btn_settings = RoundedButton(
+            text='Настройки',
+            font_size=dp(16),
+            size_hint=(1, None),
+            height=dp(54),
+        )
+        self.btn_settings.corner_radius = dp(18)
+        apply_btn_style(self.btn_settings, role="surface")
+        self.btn_settings.bind(on_press=self.go_to_settings)
 
         # Собираем интерфейс
-        buttons_layout.add_widget(btn_calc1)
-        buttons_layout.add_widget(btn_calc2)
+        buttons_layout.add_widget(self.btn_calc1)
+        buttons_layout.add_widget(self.btn_calc2)
+        buttons_layout.add_widget(self.btn_settings)
 
-        main_layout.add_widget(title)
+        # Без логотипа: больше воздуха под кнопки
+        main_layout.add_widget(Label(size_hint=(1, 1)))  # spacer
         main_layout.add_widget(buttons_layout)
+        main_layout.add_widget(Label(size_hint=(1, 1)))  # spacer
 
-        self.add_widget(main_layout)
+        self.add_widget(root)
+
+    def on_pre_enter(self):
+        self._apply_bg_video()
+        # На всякий случай синхронизируем стили кнопок с текущей темой
+        for b in (getattr(self, "btn_calc1", None), getattr(self, "btn_calc2", None), getattr(self, "btn_settings", None)):
+            if b is not None:
+                role = getattr(b, "_ui_btn_role", "surface")
+                apply_btn_style(b, role=role)
+
+    def _apply_bg_video(self):
+        from kivy.app import App
+
+        app = App.get_running_app()
+        mode = getattr(app, "theme_mode", theme.THEME_LIGHT)
+        use_video = bool(getattr(app, "use_video_bg", True))
+
+        # Фото-фон по теме (если видео выключено — это основной фон)
+        tex = None
+        try:
+            tex = getattr(app, "bg_textures", {}).get(mode)
+        except Exception:
+            tex = None
+        if tex is not None:
+            self.bg_photo.texture = tex
+        self._layout_photo_cover()
+
+        if not use_video:
+            self.bg_video.opacity = 0
+            try:
+                self.bg_video.state = "stop"
+            except Exception:
+                pass
+            return
+
+        rel = "assets/dark_theme.mp4" if mode == theme.THEME_DARK else "assets/white_theme.mp4"
+        path = resource_find(rel) or rel
+        # Video.source ожидает путь к файлу, не file:// URI
+        self.bg_video.source = path
+        try:
+            self.bg_video.state = "stop"
+            self.bg_video.state = "play"
+        except Exception:
+            pass
+        # Через небольшой таймаут проверяем, смогли ли получить texture
+        self.bg_video.opacity = 0
+        Clock.schedule_once(self._check_video_loaded, 0.35)
+        Clock.schedule_once(self._check_video_loaded, 1.0)
+
+    def _check_video_loaded(self, *_):
+        # Если видео не загрузилось (нет texture), остаёмся на фолбэк-фоне
+        tex = getattr(self.bg_video, "texture", None)
+        if tex is not None:
+            self._layout_video_cover()
+            self.bg_video.opacity = 1
+
+    def _layout_video_cover(self):
+        """
+        Cover (как CSS background-size: cover):
+        - сохраняем пропорции
+        - заполняем весь экран
+        - лишнее обрезается по краям
+        """
+        tex = getattr(self.bg_video, "texture", None)
+        if tex is None or tex.width <= 0 or tex.height <= 0:
+            # пока нет texture — хотя бы заполняем контейнер
+            self.bg_video.pos = self._root.pos
+            self.bg_video.size = self._root.size
+            return
+
+        cw, ch = self._root.size
+        if cw <= 0 or ch <= 0:
+            return
+
+        vw, vh = float(tex.width), float(tex.height)
+        scale = max(cw / vw, ch / vh)
+        w = vw * scale
+        h = vh * scale
+        x = self._root.x + (cw - w) / 2.0
+        y = self._root.y + (ch - h) / 2.0
+        self.bg_video.pos = (x, y)
+        self.bg_video.size = (w, h)
+
+    def _layout_photo_cover(self):
+        tex = getattr(self.bg_photo, "texture", None)
+        if tex is None or tex.width <= 0 or tex.height <= 0:
+            self.bg_photo.pos = self._root.pos
+            self.bg_photo.size = self._root.size
+            return
+        cw, ch = self._root.size
+        if cw <= 0 or ch <= 0:
+            return
+        vw, vh = float(tex.width), float(tex.height)
+        scale = max(cw / vw, ch / vh)
+        w = vw * scale
+        h = vh * scale
+        x = self._root.x + (cw - w) / 2.0
+        y = self._root.y + (ch - h) / 2.0
+        self.bg_photo.pos = (x, y)
+        self.bg_photo.size = (w, h)
 
     def go_to_projects(self, instance):  # Переименован метод
         """Переход к экрану проектов"""
         print("Переход к экрану проектов")
         self.manager.current = 'projects'
 
-    def show_placeholder(self, instance):
-        """Заглушка для второго калькулятора"""
-        instance.text = "В разработке!"
-        from kivy.clock import Clock
-        Clock.schedule_once(lambda dt: setattr(
-            instance, 'text', 'Расчет материалов'), 1)
+    def go_to_materials(self, instance):
+        """Переход к расчету материалов"""
+        self.manager.current = 'materials_projects'
+
+    def go_to_settings(self, instance):
+        self.manager.current = "settings"

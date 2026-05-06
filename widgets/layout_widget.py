@@ -59,6 +59,18 @@ class LayoutWidget(Widget):
     def _is_ccw(self, pts):
         return self._polygon_signed_area(pts) > 0
 
+    def _walls_ccw(self):
+        if not self.walls:
+            return True
+        pts = [(self.walls[0][0], self.walls[0][1])]
+        for wall in self.walls:
+            pts.append((wall[2], wall[3]))
+        if len(pts) > 1 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) < 3:
+            return True
+        return self._is_ccw(pts)
+
     def _point_in_triangle(self, p, a, b, c):
         px, py = p
         ax, ay = a
@@ -226,6 +238,7 @@ class LayoutWidget(Widget):
         if not self.walls:
             return
         from kivy.graphics import PushMatrix, PopMatrix, Rotate
+        ccw = self._walls_ccw()
         for wall in self.walls:
             x1, y1, x2, y2 = wall
             length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -238,8 +251,12 @@ class LayoutWidget(Widget):
                 angle_degrees += 180
             length_wall = math.sqrt(dx**2 + dy**2)
             if length_wall > 0:
+                # Левый нормаль; для CCW он направлен внутрь, инвертируем
                 nx = -dy / length_wall
                 ny = dx / length_wall
+                if ccw:
+                    nx = -nx
+                    ny = -ny
                 offset = 100
                 text_x = mid_x + nx * offset
                 text_y = mid_y + ny * offset
@@ -277,16 +294,26 @@ class LayoutWidget(Widget):
     def draw_all_cut_dimensions(self):
         if not self.layout or not self.layout.tiles:
             return
+
+        def fmt_cut(value):
+            # Показываем до 0.1 см, чтобы не терять пограничные подрезки
+            v = round(max(0.0, min(60.0, value)), 1)
+            if abs(v - round(v)) < 0.05:
+                return f"{int(round(v))}"
+            return f"{v:.1f}".replace(".", ",")
+
+        show_cut_threshold = 59.95  # все, что заметно меньше 60 см, считаем подрезкой
+
         for tile in self.layout.tiles:
             if tile['type'] != 'cut':
                 continue
             remaining_x = tile.get('cut_x', 60.0)
             remaining_y = tile.get('cut_y', 60.0)
             texts = []
-            if remaining_x < 59.5:
-                texts.append(f"{int(round(remaining_x))}")
-            if remaining_y < 59.5:
-                texts.append(f"{int(round(remaining_y))}")
+            if remaining_x < show_cut_threshold:
+                texts.append(fmt_cut(remaining_x))
+            if remaining_y < show_cut_threshold:
+                texts.append(fmt_cut(remaining_y))
             if not texts:
                 continue
             text = f"{texts[0]}×{texts[1]}" if len(texts) == 2 else texts[0]
@@ -391,35 +418,85 @@ class LayoutWidget(Widget):
             px2 = self.cm_to_px(x2, y2)
             Line(points=[px1[0], px1[1], px2[0], px2[1]], width=3)
 
+    def _visible_world_bounds(self):
+        """Возвращает видимую область в мировых координатах (см)."""
+        # Важно использовать реальные координаты виджета на экране,
+        # иначе culling будет обрезать содержимое сверху/сбоку.
+        min_x = (self.x - self.offset_x) / self.scale
+        max_x = (self.right - self.offset_x) / self.scale
+        min_y = (self.y - self.offset_y) / self.scale
+        max_y = (self.top - self.offset_y) / self.scale
+        return min_x, max_x, min_y, max_y
+
+    def _tile_visible(self, tile, world_bounds, margin_cm=60):
+        min_x, max_x, min_y, max_y = world_bounds
+        return not (
+            tile['x2'] < min_x - margin_cm or
+            tile['x1'] > max_x + margin_cm or
+            tile['y2'] < min_y - margin_cm or
+            tile['y1'] > max_y + margin_cm
+        )
+
+    def _append_rect_mesh(self, vertices, indices, x1, y1, x2, y2):
+        base = len(vertices) // 4
+        vertices.extend([x1, y1, 0, 0])
+        vertices.extend([x2, y1, 0, 0])
+        vertices.extend([x2, y2, 0, 0])
+        vertices.extend([x1, y2, 0, 0])
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+
+    def _append_rect_line_mesh(self, vertices, indices, x1, y1, x2, y2):
+        base = len(vertices) // 4
+        vertices.extend([x1, y1, 0, 0])
+        vertices.extend([x2, y1, 0, 0])
+        vertices.extend([x2, y2, 0, 0])
+        vertices.extend([x1, y2, 0, 0])
+        indices.extend([
+            base, base + 1,
+            base + 1, base + 2,
+            base + 2, base + 3,
+            base + 3, base
+        ])
+
     def draw_grid_tiles(self):
         if not self.layout or not self.layout.tiles:
             return
+        visible_bounds = self._visible_world_bounds()
+        full_vertices, full_indices = [], []
+        cut_vertices, cut_indices = [], []
+        line_vertices, line_indices = [], []
+
         for tile in self.layout.tiles:
             if tile['type'] == 'outside':
+                continue
+            if not self._tile_visible(tile, visible_bounds):
                 continue
             if tile['type'] == 'cut':
                 cut_x = tile.get('cut_x', 0)
                 cut_y = tile.get('cut_y', 0)
-                if cut_x < 1.0 and cut_y < 1.0:
+                # Если подрезка по любой оси практически нулевая — не рисуем плитку
+                if cut_x < 1.0 or cut_y < 1.0:
                     continue
             x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
             px1 = self.cm_to_px(x1, y1)
             px2 = self.cm_to_px(x2, y2)
+            rx1, rx2 = min(px1[0], px2[0]), max(px1[0], px2[0])
+            ry1, ry2 = min(px1[1], px2[1]), max(px1[1], px2[1])
             if tile['type'] == 'full':
-                Color(*self.full_tile_color)
-                Rectangle(pos=px1, size=(px2[0]-px1[0], px2[1]-px1[1]))
+                self._append_rect_mesh(full_vertices, full_indices, rx1, ry1, rx2, ry2)
             else:
-                Color(*self.cut_tile_color)
-                Rectangle(pos=px1, size=(px2[0]-px1[0], px2[1]-px1[1]))
-        Color(*self.grid_color)
-        for tile in self.layout.tiles:
-            if tile['type'] == 'outside':
-                continue
-            x1, y1, x2, y2 = tile['x1'], tile['y1'], tile['x2'], tile['y2']
-            px1 = self.cm_to_px(x1, y1)
-            px2 = self.cm_to_px(x2, y2)
-            Line(rectangle=(px1[0], px1[1], px2[0] -
-                 px1[0], px2[1]-px1[1]), width=1)
+                self._append_rect_mesh(cut_vertices, cut_indices, rx1, ry1, rx2, ry2)
+            self._append_rect_line_mesh(line_vertices, line_indices, rx1, ry1, rx2, ry2)
+
+        if full_vertices:
+            Color(*self.full_tile_color)
+            Mesh(vertices=full_vertices, indices=full_indices, mode='triangles')
+        if cut_vertices:
+            Color(*self.cut_tile_color)
+            Mesh(vertices=cut_vertices, indices=cut_indices, mode='triangles')
+        if line_vertices:
+            Color(*self.grid_color)
+            Mesh(vertices=line_vertices, indices=line_indices, mode='lines')
 
     def schedule_redraw(self):
         if not self.redraw_scheduled:
@@ -456,6 +533,22 @@ class LayoutWidget(Widget):
         else:
             self.draw_layout()
 
+    def zoom_at_point(self, screen_x, screen_y, zoom_in=True):
+        """Масштабирует относительно заданной точки экрана."""
+        if self.scale <= 0:
+            return
+        world_x = (screen_x - self.offset_x) / self.scale
+        world_y = (screen_y - self.offset_y) / self.scale
+        if zoom_in:
+            new_scale = min(2.0, self.scale + 0.05)
+        else:
+            new_scale = max(0.1, self.scale - 0.05)
+        self.scale = new_scale
+        self.offset_x = screen_x - world_x * self.scale
+        self.offset_y = screen_y - world_y * self.scale
+        self.apply_bounds_protection()
+        self.draw_layout()
+
     def apply_bounds_protection(self):
         if not self.room_bounds:
             return
@@ -486,10 +579,9 @@ class LayoutWidget(Widget):
         if self.collide_point(*touch.pos):
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
-                    self.scale = max(0.1, self.scale - 0.05)
+                    self.zoom_at_point(touch.x, touch.y, zoom_in=False)
                 elif touch.button == 'scrollup':
-                    self.scale = min(1.0, self.scale + 0.05)
-                self.draw_layout()
+                    self.zoom_at_point(touch.x, touch.y, zoom_in=True)
                 return True
             self.touches[touch.id] = touch
             if len(self.touches) == 2:

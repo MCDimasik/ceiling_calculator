@@ -2,6 +2,7 @@
 import json
 from datetime import datetime
 import math
+from collections import OrderedDict
 
 
 class Project:
@@ -73,6 +74,7 @@ class Room:
 class CeilingLayout:
     """Класс для расчета раскладки потолка 60×60 см"""
     TILE_SIZE = 60  # 60 см
+    GEOM_EPS_CM = 0.05  # 0.5 мм допуск для геометрических сравнений
 
     def __init__(self, room):
         self.room = room
@@ -88,6 +90,24 @@ class CeilingLayout:
         self.room_bounds = self.get_room_bounds()
         self.room_area_sqm = 0.0
         self._area_calculated = False
+        # Кэшируем результаты раскладки для одинаковой геометрии/смещения
+        self._layout_cache = OrderedDict()
+        self._layout_cache_limit = 128
+
+    def _walls_signature(self):
+        """Сигнатура стен для ключа кэша."""
+        return tuple(
+            (round(w[0], 3), round(w[1], 3), round(w[2], 3), round(w[3], 3))
+            for w in self.room.walls
+        )
+
+    def _layout_cache_key(self):
+        return (
+            self._walls_signature(),
+            round(self.grid_offset_x, 3),
+            round(self.grid_offset_y, 3),
+            self.TILE_SIZE,
+        )
 
     def reset_area_cache(self):
         """← НОВОЕ: Сбрасывает кэш площади для пересчета"""
@@ -156,23 +176,123 @@ class CeilingLayout:
         return area_sqcm
 
     def _build_room_polygon(self):
-        """Предварительно строит полигон комнаты один раз"""
+        """Строит упорядоченный полигон комнаты по последовательности стен."""
+        return self._ordered_room_points(closed=True)
+
+    def _ordered_room_points(self, closed=False):
         if not self.room.walls:
             return []
-        points = []
+        points = [(self.room.walls[0][0], self.room.walls[0][1])]
         for wall in self.room.walls:
-            points.append((wall[0], wall[1]))
             points.append((wall[2], wall[3]))
-        unique_points = []
-        for point in points:
-            if point not in unique_points:
-                unique_points.append(point)
-        if unique_points and unique_points[0] != unique_points[-1]:
-            unique_points.append(unique_points[0])
-        return unique_points
+
+        # Удаляем подряд идущие дубликаты
+        cleaned = []
+        for p in points:
+            if not cleaned or p != cleaned[-1]:
+                cleaned.append(p)
+
+        if not cleaned:
+            return []
+
+        if closed:
+            if cleaned[0] != cleaned[-1]:
+                cleaned.append(cleaned[0])
+        else:
+            if len(cleaned) > 1 and cleaned[0] == cleaned[-1]:
+                cleaned = cleaned[:-1]
+        return cleaned
+
+    def _polygon_area(self, points):
+        if len(points) < 3:
+            return 0.0
+        area = 0.0
+        n = len(points)
+        for i in range(n):
+            x1, y1 = points[i]
+            x2, y2 = points[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+        return abs(area) / 2.0
+
+    def _clip_polygon_with_rect(self, polygon, x1, y1, x2, y2):
+        """Sutherland-Hodgman: polygon ∩ axis-aligned rectangle."""
+        if not polygon:
+            return []
+        left, right = min(x1, x2), max(x1, x2)
+        bottom, top = min(y1, y2), max(y1, y2)
+
+        def clip_edge(points, inside_fn, intersect_fn):
+            if not points:
+                return []
+            out = []
+            prev = points[-1]
+            prev_inside = inside_fn(prev)
+            for curr in points:
+                curr_inside = inside_fn(curr)
+                if curr_inside:
+                    if not prev_inside:
+                        out.append(intersect_fn(prev, curr))
+                    out.append(curr)
+                elif prev_inside:
+                    out.append(intersect_fn(prev, curr))
+                prev = curr
+                prev_inside = curr_inside
+            return out
+
+        def inter_left(a, b):
+            ax, ay = a
+            bx, by = b
+            if abs(bx - ax) < 1e-10:
+                return (left, ay)
+            t = (left - ax) / (bx - ax)
+            return (left, ay + t * (by - ay))
+
+        def inter_right(a, b):
+            ax, ay = a
+            bx, by = b
+            if abs(bx - ax) < 1e-10:
+                return (right, ay)
+            t = (right - ax) / (bx - ax)
+            return (right, ay + t * (by - ay))
+
+        def inter_bottom(a, b):
+            ax, ay = a
+            bx, by = b
+            if abs(by - ay) < 1e-10:
+                return (ax, bottom)
+            t = (bottom - ay) / (by - ay)
+            return (ax + t * (bx - ax), bottom)
+
+        def inter_top(a, b):
+            ax, ay = a
+            bx, by = b
+            if abs(by - ay) < 1e-10:
+                return (ax, top)
+            t = (top - ay) / (by - ay)
+            return (ax + t * (bx - ax), top)
+
+        pts = polygon[:]
+        pts = clip_edge(pts, lambda p: p[0] >= left, inter_left)
+        pts = clip_edge(pts, lambda p: p[0] <= right, inter_right)
+        pts = clip_edge(pts, lambda p: p[1] >= bottom, inter_bottom)
+        pts = clip_edge(pts, lambda p: p[1] <= top, inter_top)
+        return pts
 
     def calculate_layout(self):
         """Рассчитывает раскладку для текущего смещения"""
+        cache_key = self._layout_cache_key()
+        cached = self._layout_cache.get(cache_key)
+        if cached:
+            # LRU: обращенную запись считаем "свежей"
+            self._layout_cache.move_to_end(cache_key)
+            self.tiles = [tile.copy() for tile in cached['tiles']]
+            self.full_tiles = cached['full_tiles']
+            self.cut_tiles = cached['cut_tiles']
+            self.waste_percentage = cached['waste_percentage']
+            self.room_area_sqm = cached['room_area_sqm']
+            self._area_calculated = True
+            return
+
         self.tiles = []
         self.full_tiles = 0
         self.cut_tiles = 0
@@ -217,17 +337,27 @@ class CeilingLayout:
             x += self.TILE_SIZE
 
         self.calculate_statistics()
+        self._layout_cache[cache_key] = {
+            'tiles': [tile.copy() for tile in self.tiles],
+            'full_tiles': self.full_tiles,
+            'cut_tiles': self.cut_tiles,
+            'waste_percentage': self.waste_percentage,
+            'room_area_sqm': self.room_area_sqm,
+        }
+        # Ограничиваем размер кэша (LRU)
+        while len(self._layout_cache) > self._layout_cache_limit:
+            self._layout_cache.popitem(last=False)
 
     def analyze_tile(self, x1, y1, x2, y2):
         """Анализирует плитку с учетом реальной геометрии комнаты"""
         room_min_x, room_max_x, room_min_y, room_max_y = self.get_room_bounds()
+        eps = self.GEOM_EPS_CM
 
         if x2 <= room_min_x or x1 >= room_max_x or y2 <= room_min_y or y1 >= room_max_y:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
 
         corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-        corners_inside = sum(
-            1 for corner in corners if self.is_point_inside_room(*corner))
+        corners_inside = sum(1 for corner in corners if self.is_point_inside_or_on_boundary(*corner))
 
         if corners_inside == 4:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'full', 'cut_x': 60, 'cut_y': 60}
@@ -239,20 +369,25 @@ class CeilingLayout:
                 (x1 + 20, y2 - 20), (x2 - 20, y1 + 20)
             ]
             points_inside = sum(
-                1 for point in test_points if self.is_point_inside_room(*point))
+                1 for point in test_points if self.is_point_inside_or_on_boundary(*point))
             if points_inside == 0:
                 return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
 
         useful_x, useful_y = self.calculate_cut_dimensions(x1, y1, x2, y2)
 
-        if useful_x < 0.1 and useful_y < 0.1:
+        # Практически нулевые подрезки не рисуем вообще
+        if useful_x <= eps or useful_y <= eps:
             return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'outside', 'cut_x': 0, 'cut_y': 0}
+
+        # Пограничные "почти полные" считаем полными
+        if useful_x >= (self.TILE_SIZE - eps) and useful_y >= (self.TILE_SIZE - eps):
+            return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'type': 'full', 'cut_x': 60, 'cut_y': 60}
 
         return {
             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
             'type': 'cut',
-            'cut_x': max(0.1, useful_x),
-            'cut_y': max(0.1, useful_y)
+            'cut_x': max(0.0, useful_x),
+            'cut_y': max(0.0, useful_y)
         }
 
     def get_room_bounds(self):
@@ -272,6 +407,7 @@ class CeilingLayout:
 
     def calculate_cut_dimensions(self, x1, y1, x2, y2):
         """Точный расчет полезных размеров плитки (БЕЗ округления)"""
+        eps = self.GEOM_EPS_CM
         all_x = []
         all_y = []
         for wall in self.room.walls:
@@ -313,46 +449,27 @@ class CeilingLayout:
             useful_y = intersect_y2 - intersect_y1
             return max(0.0, min(60.0, useful_x)), max(0.0, min(60.0, useful_y))
         else:
-            corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-            corners_inside = [
-                p for p in corners if self.is_point_inside_room(*p)]
-            if len(corners_inside) == 4:
-                return 60.0, 60.0
-            center = ((x1 + x2) / 2, (y1 + y2) / 2)
-            if not corners_inside and not self.is_point_inside_room(*center):
+            # Точное пересечение "полигон комнаты ∩ плитка"
+            room_poly = self._ordered_room_points(closed=False)
+            if len(room_poly) < 3:
                 return 0.0, 0.0
-            intersection_points = []
-            for wall in self.room.walls:
-                wx1, wy1, wx2, wy2 = wall
-                for line in [
-                    (x1, y1, x1, y2), (x2, y1, x2, y2),
-                    (x1, y1, x2, y1), (x1, y2, x2, y2)
-                ]:
-                    inter = self.line_intersection(*line, wx1, wy1, wx2, wy2)
-                    if inter:
-                        intersection_points.append(inter)
-            inside_points = corners_inside.copy()
-            if intersection_points:
-                inside_points.extend(intersection_points)
-            else:
-                key_points = [
-                    (x1 + 20, y1 + 20), (x1 + 40, y1 + 20),
-                    (x1 + 20, y1 + 40), (x1 + 40, y1 + 40),
-                    (x1 + 30, y1 + 30)
-                ]
-                for px, py in key_points:
-                    if self.is_point_inside_room(px, py):
-                        inside_points.append((px, py))
-            if not inside_points:
+            clipped = self._clip_polygon_with_rect(room_poly, x1, y1, x2, y2)
+            if len(clipped) < 3:
                 return 0.0, 0.0
-            min_x = min(p[0] for p in inside_points)
-            max_x = max(p[0] for p in inside_points)
-            min_y = min(p[1] for p in inside_points)
-            max_y = max(p[1] for p in inside_points)
-            # ← ИСПРАВЛЕНО: БЕЗ round()
-            useful_x = max(0.0, min(60.0, max_x - min_x))
-            useful_y = max(0.0, min(60.0, max_y - min_y))
-            return max(0.1, useful_x), max(0.1, useful_y)
+
+            intersection_area = self._polygon_area(clipped)
+            if intersection_area <= eps * eps:
+                return 0.0, 0.0
+
+            min_x_i = min(p[0] for p in clipped)
+            max_x_i = max(p[0] for p in clipped)
+            min_y_i = min(p[1] for p in clipped)
+            max_y_i = max(p[1] for p in clipped)
+            useful_x = max(0.0, min(60.0, max_x_i - min_x_i))
+            useful_y = max(0.0, min(60.0, max_y_i - min_y_i))
+            if useful_x <= eps or useful_y <= eps:
+                return 0.0, 0.0
+            return useful_x, useful_y
 
     def line_intersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
         """Находит точку пересечения двух отрезков"""
@@ -406,6 +523,15 @@ class CeilingLayout:
                 inside = not inside
             j = i
         return inside
+
+    def is_point_inside_or_on_boundary(self, px, py):
+        """Точка внутри или на границе помещения (с допуском)."""
+        eps = self.GEOM_EPS_CM
+        for wall in self.room.walls:
+            x1, y1, x2, y2 = wall
+            if self.point_to_line_distance(px, py, x1, y1, x2, y2) <= eps:
+                return True
+        return self.is_point_inside_room(px, py)
 
     # def calculate_room_area(self):
     #     """Точный расчет площади комнаты методом триангуляции для сложных форм"""

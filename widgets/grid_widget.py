@@ -79,6 +79,22 @@ class GridWidget(Widget):
         px_y = self.offset_y + cm_y * self.scale
         return px_x, px_y
 
+    def zoom_at_point(self, screen_x, screen_y, zoom_in=True):
+        """Масштабирует редактор относительно точки курсора/касания."""
+        if self.scale <= 0:
+            return
+        world_x = (screen_x - self.offset_x) / self.scale
+        world_y = (screen_y - self.offset_y) / self.scale
+        if zoom_in:
+            new_scale = min(3.0, self.scale + 0.05)
+        else:
+            new_scale = max(0.1, self.scale - 0.05)
+        self.scale = new_scale
+        self.offset_x = screen_x - world_x * self.scale
+        self.offset_y = screen_y - world_y * self.scale
+        self.canvas.clear()
+        self.draw_editor()
+
     def draw_editor(self):
         from kivy.graphics import StencilPush, StencilUse, StencilUnUse, StencilPop
 
@@ -168,6 +184,18 @@ class GridWidget(Widget):
 
     def _is_ccw(self, pts):
         return self._polygon_signed_area(pts) > 0
+
+    def _walls_ccw(self):
+        if not self.walls:
+            return True
+        pts = [(self.walls[0][0], self.walls[0][1])]
+        for wall in self.walls:
+            pts.append((wall[2], wall[3]))
+        if len(pts) > 1 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) < 3:
+            return True
+        return self._is_ccw(pts)
 
     def _point_in_triangle(self, p, a, b, c):
         # barycentric technique
@@ -449,11 +477,9 @@ class GridWidget(Widget):
                 return True
             if touch.is_mouse_scrolling:
                 if touch.button == 'scrolldown':
-                    self.scale = max(0.1, self.scale - 0.05)
+                    self.zoom_at_point(touch.x, touch.y, zoom_in=False)
                 elif touch.button == 'scrollup':
-                    self.scale = min(3.0, self.scale + 0.05)
-                self.canvas.clear()
-                self.draw_editor()
+                    self.zoom_at_point(touch.x, touch.y, zoom_in=True)
                 return True
             self.touches[touch.id] = touch
             if len(self.touches) == 2:
@@ -528,6 +554,7 @@ class GridWidget(Widget):
         from kivy.core.text import Label as CoreLabel
         from kivy.graphics import Color, Rectangle
         import math
+        ccw = self._walls_ccw()
         for wall in self.walls:
             x1, y1, x2, y2 = wall
             length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -537,8 +564,12 @@ class GridWidget(Widget):
             dy = y2 - y1
             length_wall = math.sqrt(dx**2 + dy**2)
             if length_wall > 0:
+                # Левый нормаль; для CCW он смотрит внутрь, разворачиваем наружу
                 nx = -dy / length_wall
                 ny = dx / length_wall
+                if ccw:
+                    nx = -nx
+                    ny = -ny
                 offset = 10
                 text_x = mid_x + nx * offset
                 text_y = mid_y + ny * offset
