@@ -1,15 +1,70 @@
 # database.py
 import sqlite3
 import json
+import os
+import shutil
 from datetime import datetime
 from models import Project, Room
 
 DB_NAME = "ceiling_calculator.db"
 
 
+def _app_user_data_dir() -> str | None:
+    """
+    Возвращает папку данных приложения (переживает обновления APK).
+    На Android это /data/data/<package>/files.
+    """
+    try:
+        from kivy.app import App
+
+        app = App.get_running_app()
+        if app is not None and getattr(app, "user_data_dir", None):
+            return str(app.user_data_dir)
+    except Exception:
+        pass
+    return None
+
+
+def get_db_path() -> str:
+    """
+    Абсолютный путь к БД.
+    Важно: на Android БД должна лежать в user_data_dir, иначе при обновлениях
+    пакетные файлы могут перезаписываться.
+    """
+    udd = _app_user_data_dir()
+    if udd:
+        return os.path.join(udd, DB_NAME)
+    # fallback для десктопа/ранних импортов
+    return os.path.abspath(DB_NAME)
+
+
+def _ensure_db_location():
+    """
+    Одноразовая миграция расположения:
+    - если БД уже есть в user_data_dir — ничего не делаем
+    - если БД есть в старом месте (рядом с кодом) — копируем в user_data_dir
+    """
+    udd = _app_user_data_dir()
+    if not udd:
+        return
+
+    new_path = os.path.join(udd, DB_NAME)
+    if os.path.exists(new_path):
+        return
+
+    old_path = os.path.abspath(DB_NAME)
+    if os.path.exists(old_path):
+        try:
+            os.makedirs(udd, exist_ok=True)
+            shutil.copy2(old_path, new_path)
+        except Exception as e:
+            print(f"Не удалось перенести базу данных в user_data_dir: {e}")
+
+
 def init_db():
     """Инициализирует базу данных и создает таблицы."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
 
     # Таблица для проектов
@@ -77,7 +132,8 @@ def init_db():
 
 def save_project(project):
     """Сохраняет проект (и его комнаты) в базу данных."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         p_ceiling = getattr(project, "materials_ceiling", None)
@@ -125,7 +181,8 @@ def save_project(project):
 
 def load_project(project_id):
     """Загружает проект (и его комнаты) из базы данных по ID."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -172,7 +229,8 @@ def load_project(project_id):
 
 def load_all_projects():
     """Загружает список всех проектов (без комнат)."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -194,7 +252,8 @@ def load_all_projects():
 
 def update_project_materials_config(project_id: int, ceiling: str = None, susp: str = None, cell: str = None):
     """Легковесное обновление конфигурации материалов для проекта (без пересохранения всех комнат)."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -213,7 +272,8 @@ def update_project_materials_config(project_id: int, ceiling: str = None, susp: 
 
 def update_room_materials_config(room_id: int, *, override: bool = None, ceiling: str = None, susp: str = None, cell: str = None):
     """Легковесное обновление конфигурации материалов для комнаты."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         if override is None:
@@ -238,7 +298,8 @@ def update_room_materials_config(room_id: int, *, override: bool = None, ceiling
 
 def delete_project(project_id):
     """Удаляет проект и все его комнаты из базы данных."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project_id,))
@@ -256,7 +317,8 @@ def delete_project(project_id):
 
 def delete_room_from_project(project_id, room_id):
     """Удаляет комнату из базы данных, связанной с проектом."""
-    conn = sqlite3.connect(DB_NAME)
+    _ensure_db_location()
+    conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     try:
         cursor.execute(
