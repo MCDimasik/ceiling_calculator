@@ -13,6 +13,7 @@ from screens.layout_screen import LayoutScreen
 from screens.materials_projects_screen import MaterialsProjectsScreen
 from screens.materials_rooms_screen import MaterialsRoomsScreen
 from screens.materials_result_screen import MaterialsResultScreen
+from screens.materials_project_result_screen import MaterialsProjectResultScreen
 from screens.settings_screen import SettingsScreen
 
 import theme
@@ -67,6 +68,7 @@ class CeilingCalculatorApp(App):
         sm.add_widget(MaterialsProjectsScreen(name='materials_projects'))
         sm.add_widget(MaterialsRoomsScreen(name='materials_rooms'))
         sm.add_widget(MaterialsResultScreen(name='materials_result'))
+        sm.add_widget(MaterialsProjectResultScreen(name='materials_project_result'))
         sm.add_widget(SettingsScreen(name='settings'))
 
         return sm

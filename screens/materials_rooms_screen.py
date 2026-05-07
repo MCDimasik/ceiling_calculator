@@ -33,14 +33,14 @@ class MaterialsRoomsScreen(Screen):
 
         main = BoxLayout(orientation="vertical", spacing=dp(2), size_hint=(1, 1))
         toolbar = BoxLayout(size_hint=(1, None), height=dp(72), padding=(dp(12), dp(6)), spacing=dp(10))
-        btn_back = RoundedButton(text="Назад", font_size=dp(14), size_hint=(0.35, 1))
+        btn_back = RoundedButton(text="Назад", font_size=dp(14), size_hint=(0.30, 1))
         btn_back.corner_radius = dp(14)
         apply_btn_style(btn_back, role="secondary")
         btn_back.bind(on_press=lambda *_: setattr(self.manager, "current", "materials_projects"))
         self.title = RoundedLabel(
             text="Комнаты",
             font_size=dp(16),
-            size_hint=(0.65, 1),
+            size_hint=(0.40, 1),
             color=COLORS["text"],
             halign='center',
             valign='middle',
@@ -49,8 +49,16 @@ class MaterialsRoomsScreen(Screen):
         style_title(self.title)
         self.title.bind(size=self.title.setter('text_size'))
         wrap_button_text(btn_back)
+
+        btn_calc = RoundedButton(text="Полный\nРасчет", font_size=dp(14), size_hint=(0.30, 1))
+        btn_calc.corner_radius = dp(14)
+        apply_btn_style(btn_calc, role="secondary")
+        wrap_button_text(btn_calc)
+        btn_calc.bind(on_press=lambda *_: setattr(self.manager, "current", "materials_project_result"))
+
         toolbar.add_widget(btn_back)
         toolbar.add_widget(self.title)
+        toolbar.add_widget(btn_calc)
 
         self.container = GridLayout(cols=2, spacing=dp(10), padding=dp(10), size_hint_y=None)
         self.container.bind(minimum_height=self.container.setter("height"))
@@ -71,7 +79,7 @@ class MaterialsRoomsScreen(Screen):
             return
         full = load_project(project.id) if project.id else project
         self.manager.current_project = full
-        self.title.text = f"Комнаты: {full.name}"
+        self.title.text = f"{full.name}"
         self.container.clear_widgets()
         self.container.cols = 2
         if not full.rooms:

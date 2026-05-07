@@ -21,7 +21,8 @@ from materials_calculator import (
 )
 from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text
 from ui_style import style_popup_card
-from widgets.ui_components import RoundedButton, RoundedLabel, StyledSpinnerOption, SegmentedControl
+from widgets.ui_components import RoundedButton, RoundedLabel, StyledSpinnerOption, SegmentedControl, SwitchRow
+from database import update_project_materials_config, update_room_materials_config
 import theme
 
 
@@ -29,6 +30,7 @@ class MaterialsResultScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._calc_trigger = None
+        self._loading_config = False
         root = FloatLayout()
         self._root = root
         self.bg_photo = Image(source="assets/bg_light.png", allow_stretch=True, keep_ratio=True)
@@ -87,7 +89,7 @@ class MaterialsResultScreen(Screen):
             size_hint=(1, None),
             height=dp(48),
         )
-        self.susp_tabs.on_change = lambda *_: self.request_calculate()
+        self.susp_tabs.on_change = lambda *_: (self._persist_current_config(), self.request_calculate())
 
         self.cell_tabs = SegmentedControl(
             values=["50x50", "75x75", "100x100"],
@@ -95,11 +97,16 @@ class MaterialsResultScreen(Screen):
             size_hint=(1, None),
             height=dp(48),
         )
-        self.cell_tabs.on_change = lambda *_: self.request_calculate()
+        self.cell_tabs.on_change = lambda *_: (self._persist_current_config(), self.request_calculate())
 
         controls.add_widget(self.ceiling_tabs)
         controls.add_widget(self.susp_tabs)
         controls.add_widget(self.cell_tabs)
+
+        # Пер-комнатный оверрайд конфигурации
+        self.override_row = SwitchRow("Индивидуальная конфигурация", size_hint=(1, None), height=dp(40))
+        self.override_row.on_toggle = lambda is_on: self._on_override_toggle(is_on)
+        controls.add_widget(self.override_row)
 
         # Вместо "карточек", которые влияют на лейаут и дают съезды/наложения,
         # делаем общий полупрозрачный слой поверх фоновой картинки и под всем UI.
@@ -273,6 +280,7 @@ class MaterialsResultScreen(Screen):
         self.susp_tabs.end_batch()
         self.cell_tabs.end_batch()
         self._toggle_cell_row()
+        self._persist_current_config()
         self.request_calculate()
 
     def request_calculate(self):
@@ -290,6 +298,97 @@ class MaterialsResultScreen(Screen):
         self._calc_trigger = lambda dt: self.calculate()
         Clock.schedule_once(self._calc_trigger, 0)
 
+    def _effective_project_config(self):
+        project = getattr(self.manager, "current_project", None)
+        ceiling = getattr(project, "materials_ceiling", None) or "Армстронг"
+        susp = getattr(project, "materials_susp", None) or "Подвес 0,5"
+        cell = getattr(project, "materials_cell", None) or "50x50"
+        return ceiling, susp, cell
+
+    def _effective_room_config(self):
+        """
+        Конфиг, который должен применяться для этой комнаты:
+        - если override выключен: берём проектный (и UI тоже управляет проектным)
+        - если override включен: берём комнатный, с фолбэком на проектный
+        """
+        room = getattr(self.manager, "current_room", None)
+        p_ceiling, p_susp, p_cell = self._effective_project_config()
+        if not room:
+            return False, p_ceiling, p_susp, p_cell
+        is_override = bool(getattr(room, "materials_override", False))
+        if not is_override:
+            return False, p_ceiling, p_susp, p_cell
+        r_ceiling = getattr(room, "materials_ceiling", None) or p_ceiling
+        r_susp = getattr(room, "materials_susp", None) or p_susp
+        r_cell = getattr(room, "materials_cell", None) or p_cell
+        return True, r_ceiling, r_susp, r_cell
+
+    def _apply_config_to_ui(self, *, override: bool, ceiling: str, susp: str, cell: str):
+        self._loading_config = True
+        try:
+            self.override_row.active = bool(override)
+            self.ceiling_tabs.begin_batch()
+            self.susp_tabs.begin_batch()
+            self.cell_tabs.begin_batch()
+            self.ceiling_tabs.set_selected(ceiling, animate=False)
+            self.susp_tabs.set_selected(susp, animate=False)
+            self.cell_tabs.set_selected(cell, animate=False)
+            self.ceiling_tabs.end_batch()
+            self.susp_tabs.end_batch()
+            self.cell_tabs.end_batch()
+            self._toggle_cell_row()
+        finally:
+            self._loading_config = False
+
+    def _persist_current_config(self):
+        """Сохранить текущий выбор либо в проект, либо в комнату (если override)."""
+        if self._loading_config:
+            return
+        room = getattr(self.manager, "current_room", None)
+        project = getattr(self.manager, "current_project", None)
+        ceiling = getattr(self.ceiling_tabs, "selected", None)
+        susp = getattr(self.susp_tabs, "selected", None)
+        cell = getattr(self.cell_tabs, "selected", None)
+
+        if room and bool(getattr(room, "materials_override", False)):
+            room.materials_ceiling = ceiling
+            room.materials_susp = susp
+            room.materials_cell = cell
+            if getattr(room, "id", None):
+                update_room_materials_config(room.id, override=True, ceiling=ceiling, susp=susp, cell=cell)
+        else:
+            if project:
+                project.materials_ceiling = ceiling
+                project.materials_susp = susp
+                project.materials_cell = cell
+                if getattr(project, "id", None):
+                    update_project_materials_config(project.id, ceiling=ceiling, susp=susp, cell=cell)
+
+    def _on_override_toggle(self, is_on: bool):
+        if self._loading_config:
+            return
+        room = getattr(self.manager, "current_room", None)
+        if not room:
+            return
+        room.materials_override = bool(is_on)
+        p_ceiling, p_susp, p_cell = self._effective_project_config()
+        if not room.materials_override:
+            # При выключении — UI переходит на проектный конфиг, а комнатный конфиг можно сохранить как есть (на будущее).
+            if getattr(room, "id", None):
+                update_room_materials_config(room.id, override=False, ceiling=getattr(room, "materials_ceiling", None),
+                                             susp=getattr(room, "materials_susp", None), cell=getattr(room, "materials_cell", None))
+            self._apply_config_to_ui(override=False, ceiling=p_ceiling, susp=p_susp, cell=p_cell)
+        else:
+            # При включении — стартуем с текущего проектного (чтобы пользователь не начинал с "пустого").
+            room.materials_ceiling = getattr(room, "materials_ceiling", None) or p_ceiling
+            room.materials_susp = getattr(room, "materials_susp", None) or p_susp
+            room.materials_cell = getattr(room, "materials_cell", None) or p_cell
+            if getattr(room, "id", None):
+                update_room_materials_config(room.id, override=True, ceiling=room.materials_ceiling,
+                                             susp=room.materials_susp, cell=room.materials_cell)
+            self._apply_config_to_ui(override=True, ceiling=room.materials_ceiling, susp=room.materials_susp, cell=room.materials_cell)
+        self.request_calculate()
+
     def _toggle_cell_row(self):
         is_gr = self.ceiling_tabs.selected in ("Грильято", "GL")
         # Строка всегда на месте (иначе интерфейс "прыгает"), но для Армстронга недоступна и чуть затемнена
@@ -301,18 +400,8 @@ class MaterialsResultScreen(Screen):
         self._apply_bg()
         room = getattr(self.manager, "current_room", None)
         self.title.text = room.name if room else "Комната не выбрана"
-        # При входе показываем авто-расчёт для стандартной конфигурации:
-        # Армстронг + подвес 0,5
-        self.ceiling_tabs.begin_batch()
-        self.susp_tabs.begin_batch()
-        self.cell_tabs.begin_batch()
-        self.ceiling_tabs.set_selected("Армстронг", animate=False)
-        self.susp_tabs.set_selected("Подвес 0,5", animate=False)
-        self.cell_tabs.set_selected("50x50", animate=False)
-        self.ceiling_tabs.end_batch()
-        self.susp_tabs.end_batch()
-        self.cell_tabs.end_batch()
-        self._toggle_cell_row()
+        override, ceiling, susp, cell = self._effective_room_config()
+        self._apply_config_to_ui(override=override, ceiling=ceiling, susp=susp, cell=cell)
         self.calculate()
 
     def _apply_bg(self):
@@ -450,3 +539,6 @@ class MaterialsResultScreen(Screen):
         self.formulas_label.text = "\n".join(formula_lines)
         if self.formulas_visible:
             self.formulas_label.height = self.formulas_label.texture_size[1] + dp(20)
+
+        # После успешного расчёта фиксируем выбор в БД (если пользователь менял конфиг).
+        self._persist_current_config()

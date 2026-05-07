@@ -17,7 +17,10 @@ def init_db():
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        materials_ceiling TEXT,
+        materials_susp TEXT,
+        materials_cell TEXT
     )
     """)
 
@@ -32,9 +35,28 @@ def init_db():
         last_position_json TEXT,
         grid_offset_x INTEGER DEFAULT 0,
         grid_offset_y INTEGER DEFAULT 0,
+        materials_override INTEGER DEFAULT 0,
+        materials_ceiling TEXT,
+        materials_susp TEXT,
+        materials_cell TEXT,
         FOREIGN KEY (project_id) REFERENCES projects (id)
     )
     """)
+
+    # Миграции для старых БД
+    for col_ddl in (
+        "ALTER TABLE projects ADD COLUMN materials_ceiling TEXT",
+        "ALTER TABLE projects ADD COLUMN materials_susp TEXT",
+        "ALTER TABLE projects ADD COLUMN materials_cell TEXT",
+        "ALTER TABLE rooms ADD COLUMN materials_override INTEGER DEFAULT 0",
+        "ALTER TABLE rooms ADD COLUMN materials_ceiling TEXT",
+        "ALTER TABLE rooms ADD COLUMN materials_susp TEXT",
+        "ALTER TABLE rooms ADD COLUMN materials_cell TEXT",
+    ):
+        try:
+            cursor.execute(col_ddl)
+        except sqlite3.OperationalError:
+            pass
 
     # ← КРИТИЧНО: Миграция для старых БД
     try:
@@ -58,16 +80,20 @@ def save_project(project):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
+        p_ceiling = getattr(project, "materials_ceiling", None)
+        p_susp = getattr(project, "materials_susp", None)
+        p_cell = getattr(project, "materials_cell", None)
+
         if project.id is None:
             cursor.execute("""
-            INSERT INTO projects (name, created_at) VALUES (?, ?)
-            """, (project.name, project.created_at.isoformat()))
+            INSERT INTO projects (name, created_at, materials_ceiling, materials_susp, materials_cell) VALUES (?, ?, ?, ?, ?)
+            """, (project.name, project.created_at.isoformat(), p_ceiling, p_susp, p_cell))
             project.id = cursor.lastrowid
         else:
             cursor.execute("""
-            UPDATE projects SET name = ?, created_at = ?
+            UPDATE projects SET name = ?, created_at = ?, materials_ceiling = ?, materials_susp = ?, materials_cell = ?
             WHERE id = ?
-            """, (project.name, project.created_at.isoformat(), project.id))
+            """, (project.name, project.created_at.isoformat(), p_ceiling, p_susp, p_cell, project.id))
 
         cursor.execute("DELETE FROM rooms WHERE project_id = ?", (project.id,))
 
@@ -77,10 +103,16 @@ def save_project(project):
                 room, 'last_position') and room.last_position else None
             grid_offset_x = getattr(room, 'grid_offset_x', 0)
             grid_offset_y = getattr(room, 'grid_offset_y', 0)
+            m_override = 1 if bool(getattr(room, "materials_override", False)) else 0
+            m_ceiling = getattr(room, "materials_ceiling", None)
+            m_susp = getattr(room, "materials_susp", None)
+            m_cell = getattr(room, "materials_cell", None)
             cursor.execute("""
-            INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str, grid_offset_x, grid_offset_y))
+            INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y,
+                               materials_override, materials_ceiling, materials_susp, materials_cell)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str, grid_offset_x, grid_offset_y,
+                  m_override, m_ceiling, m_susp, m_cell))
 
         conn.commit()
         print(f"Проект '{project.name}' успешно сохранен в базу данных.")
@@ -97,17 +129,22 @@ def load_project(project_id):
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT id, name, created_at FROM projects WHERE id = ?", (project_id,))
+            "SELECT id, name, created_at, materials_ceiling, materials_susp, materials_cell FROM projects WHERE id = ?", (project_id,))
         row = cursor.fetchone()
         if row is None:
             return None
         project = Project(row[1])
         project.id = row[0]
         project.created_at = datetime.fromisoformat(row[2])
+        project.materials_ceiling = row[3] if len(row) > 3 else None
+        project.materials_susp = row[4] if len(row) > 4 else None
+        project.materials_cell = row[5] if len(row) > 5 else None
 
         # ← КРИТИЧНО: Загружаем комнаты с всеми полями
         cursor.execute(
-            "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y FROM rooms WHERE project_id = ?", (project_id,))
+            "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y, materials_override, materials_ceiling, materials_susp, materials_cell FROM rooms WHERE project_id = ?",
+            (project_id,),
+        )
         for room_row in cursor.fetchall():
             room = Room(room_row[1])
             room.id = room_row[0]
@@ -117,6 +154,10 @@ def load_project(project_id):
                 room.last_position = json.loads(room_row[4])
             room.grid_offset_x = room_row[5] if room_row[5] else 0
             room.grid_offset_y = room_row[6] if room_row[6] else 0
+            room.materials_override = bool(room_row[7]) if len(room_row) > 7 else False
+            room.materials_ceiling = room_row[8] if len(room_row) > 8 else None
+            room.materials_susp = room_row[9] if len(room_row) > 9 else None
+            room.materials_cell = room_row[10] if len(room_row) > 10 else None
             project.rooms.append(room)
 
         print(
@@ -147,6 +188,50 @@ def load_all_projects():
     except sqlite3.Error as e:
         print(f"Ошибка при загрузке списка проектов: {e}")
         return []
+    finally:
+        conn.close()
+
+
+def update_project_materials_config(project_id: int, ceiling: str = None, susp: str = None, cell: str = None):
+    """Легковесное обновление конфигурации материалов для проекта (без пересохранения всех комнат)."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE projects SET materials_ceiling = ?, materials_susp = ?, materials_cell = ? WHERE id = ?",
+            (ceiling, susp, cell, project_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Ошибка при обновлении конфигурации материалов проекта: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def update_room_materials_config(room_id: int, *, override: bool = None, ceiling: str = None, susp: str = None, cell: str = None):
+    """Легковесное обновление конфигурации материалов для комнаты."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        if override is None:
+            cursor.execute(
+                "UPDATE rooms SET materials_ceiling = ?, materials_susp = ?, materials_cell = ? WHERE id = ?",
+                (ceiling, susp, cell, room_id),
+            )
+        else:
+            cursor.execute(
+                "UPDATE rooms SET materials_override = ?, materials_ceiling = ?, materials_susp = ?, materials_cell = ? WHERE id = ?",
+                (1 if override else 0, ceiling, susp, cell, room_id),
+            )
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Ошибка при обновлении конфигурации материалов комнаты: {e}")
+        conn.rollback()
+        return False
     finally:
         conn.close()
 
