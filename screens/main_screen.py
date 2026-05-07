@@ -131,6 +131,12 @@ class MainScreen(Screen):
     def on_leave(self, *args):
         # Не держим декодер активным между экранами
         try:
+            if getattr(self, "_video_load_poll_ev", None) is not None:
+                self._video_load_poll_ev.cancel()
+                self._video_load_poll_ev = None
+        except Exception:
+            pass
+        try:
             self.bg_video.state = "stop"
         except Exception:
             pass
@@ -169,11 +175,16 @@ class MainScreen(Screen):
         except Exception:
             pass
         # Чуть позже запускаем play (иначе на части устройств первый старт игнорируется)
-        Clock.schedule_once(self._start_video_playback, 0)
-        # Через небольшой таймаут проверяем, смогли ли получить texture
+        Clock.schedule_once(self._start_video_playback, 0.10)
+        # На слабых/перегруженных устройствах texture может появляться заметно позже 1с.
         self.bg_video.opacity = 0
-        Clock.schedule_once(self._check_video_loaded, 0.35)
-        Clock.schedule_once(self._check_video_loaded, 1.0)
+        try:
+            if getattr(self, "_video_load_poll_ev", None) is not None:
+                self._video_load_poll_ev.cancel()
+        except Exception:
+            pass
+        self._video_load_poll_ev_tries = 0
+        self._video_load_poll_ev = Clock.schedule_interval(self._poll_video_loaded, 0.25)
 
     def _start_video_playback(self, *_):
         try:
@@ -181,12 +192,30 @@ class MainScreen(Screen):
         except Exception:
             pass
 
-    def _check_video_loaded(self, *_):
+    def _poll_video_loaded(self, *_):
         # Если видео не загрузилось (нет texture), остаёмся на фолбэк-фоне
+        self._video_load_poll_ev_tries = getattr(self, "_video_load_poll_ev_tries", 0) + 1
         tex = getattr(self.bg_video, "texture", None)
         if tex is not None:
             self._layout_video_cover()
             self.bg_video.opacity = 1
+            try:
+                if getattr(self, "_video_load_poll_ev", None) is not None:
+                    self._video_load_poll_ev.cancel()
+                    self._video_load_poll_ev = None
+            except Exception:
+                pass
+            return False
+        # ~6 секунд (0.25 * 24) ждём, дальше сдаёмся и оставляем фолбэк
+        if self._video_load_poll_ev_tries >= 24:
+            try:
+                if getattr(self, "_video_load_poll_ev", None) is not None:
+                    self._video_load_poll_ev.cancel()
+                    self._video_load_poll_ev = None
+            except Exception:
+                pass
+            return False
+        return True
 
     def _layout_video_cover(self):
         """
