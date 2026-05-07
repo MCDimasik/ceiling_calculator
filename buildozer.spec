@@ -29,7 +29,7 @@ source.include_exts = py,png,jpg,kv,atlas,mp4
 #source.exclude_patterns = license,images/*/*.jpg
 
 # (str) Application versioning (method 1)
-version = 2.1.1
+version = 2.1.4
 
 # (str) Application versioning (method 2)
 # version.regex = __version__ = ['"](.*)['"]
@@ -186,6 +186,7 @@ android.accept_sdk_license = True
 # 1) android.add_assets = source_asset_relative_path
 # 2) android.add_assets = source_asset_path:destination_asset_relative_path
 #android.add_assets =
+android.add_assets = assets/white_theme.mp4, assets/dark_theme.mp4
 
 # (list) Put these files or directories in the apk res directory.
 # The option may be used in three ways, the value may contain one or zero ':'

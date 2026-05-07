@@ -10,6 +10,8 @@ from widgets.ui_components import RoundedButton
 import theme
 from kivy.clock import Clock
 from kivy.resources import resource_find
+from kivy.logger import Logger
+import os
 
 
 class MainScreen(Screen):
@@ -167,7 +169,11 @@ class MainScreen(Screen):
             return
 
         rel = "assets/dark_theme.mp4" if mode == theme.THEME_DARK else "assets/white_theme.mp4"
-        path = resource_find(rel) or rel
+        path = self._resolve_media_path(rel)
+        if not path or not os.path.exists(path):
+            Logger.warning("MainScreen: bg video not found: rel=%r resolved=%r", rel, path)
+            self.bg_video.opacity = 0
+            return
         # Video.source ожидает путь к файлу, не file:// URI
         self.bg_video.source = path
         try:
@@ -185,6 +191,28 @@ class MainScreen(Screen):
             pass
         self._video_load_poll_ev_tries = 0
         self._video_load_poll_ev = Clock.schedule_interval(self._poll_video_loaded, 0.25)
+
+    def _resolve_media_path(self, rel: str) -> str:
+        """
+        На Android `resource_find("assets/..")` иногда не срабатывает, если assets уже добавлен как resource path.
+        Пробуем несколько вариантов и возвращаем существующий путь.
+        """
+        candidates = []
+        p1 = resource_find(rel)
+        if p1:
+            candidates.append(p1)
+        base = os.path.basename(rel)
+        p2 = resource_find(base)
+        if p2:
+            candidates.append(p2)
+        candidates.append(rel)
+        for p in candidates:
+            try:
+                if p and os.path.exists(p):
+                    return p
+            except Exception:
+                continue
+        return candidates[0] if candidates else rel
 
     def _start_video_playback(self, *_):
         try:

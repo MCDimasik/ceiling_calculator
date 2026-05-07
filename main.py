@@ -1,10 +1,29 @@
-from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager
-from kivy.uix.screenmanager import SlideTransition
-from kivy.core.window import Window
-from kivy.utils import platform
 import os
 
+from kivy.app import App
+from kivy.core.window import Window
+from kivy.uix.screenmanager import ScreenManager
+from kivy.uix.screenmanager import SlideTransition
+from kivy.utils import platform
+
+import theme
+from ui_style import COLORS
+
+# ANGLE нужен только для отладки на Windows. На Android может ломать рендер/видео.
+if platform == "win":
+    os.environ["KIVY_GL_BACKEND"] = "angle_sdl2"
+
+if platform == "android":
+    # На части устройств Kivy может выбрать не тот видеопровайдер.
+    # Принудительно используем ffpyplayer (он же у нас в requirements).
+    os.environ.setdefault("KIVY_VIDEO", "ffpyplayer")
+    os.environ.setdefault("KIVY_AUDIO", "ffpyplayer")
+
+if platform != 'android':
+    Window.size = (320, 640)
+
+
+# Импорты экранов после env-настроек Kivy (важно для выбора видеопровайдера).
 from screens.main_screen import MainScreen
 from screens.projects_screen import ProjectsScreen
 from screens.rooms_screen import RoomsScreen
@@ -15,16 +34,6 @@ from screens.materials_rooms_screen import MaterialsRoomsScreen
 from screens.materials_result_screen import MaterialsResultScreen
 from screens.materials_project_result_screen import MaterialsProjectResultScreen
 from screens.settings_screen import SettingsScreen
-
-import theme
-from ui_style import COLORS
-
-# ANGLE нужен только для отладки на Windows. На Android может ломать рендер/видео.
-if platform == "win":
-    os.environ["KIVY_GL_BACKEND"] = "angle_sdl2"
-
-if platform != 'android':
-    Window.size = (320, 640)
 
 
 class CeilingCalculatorApp(App):

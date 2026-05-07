@@ -13,7 +13,11 @@ env/
 
 # Kivy/Buildozer
 build/
+.buildozer/
 .bin/
+bin/
+build-last.log
+*.log
 *.db
 *.sqlite3
 *.pyo
