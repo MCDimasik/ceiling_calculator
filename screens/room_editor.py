@@ -225,7 +225,12 @@ class RoomEditorScreen(Screen):
     def create_info_panel(self):
         info_panel = BoxLayout(size_hint=(1, 0.07), padding=dp(10))
         self.info_label = Label(
-            text='Точка: (0, 0) см | Стены: 0 | Площадь: —', font_size=dp(12), color=(0, 0, 0, 1))
+            text='Точка: (0, 0) см | Стены: 0 | Площадь: —',
+            font_size=dp(12),
+            color=COLORS["text"],
+        )
+        # Чтобы `theme.refresh_widget_tree()` мог переокрасить этот текст без хаков.
+        self.info_label._theme_slot = "text"
         info_panel.add_widget(self.info_label)
         return info_panel
 

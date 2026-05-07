@@ -32,6 +32,16 @@ class CeilingCalculatorApp(App):
     use_video_bg = True
 
     def build(self):
+        # На Android/Buildozer cwd может отличаться; добавляем явные пути ресурсов.
+        try:
+            from kivy.resources import resource_add_path
+
+            here = os.path.dirname(os.path.abspath(__file__))
+            resource_add_path(here)
+            resource_add_path(os.path.join(here, "assets"))
+        except Exception:
+            pass
+
         self.theme_prefs_path = os.path.join(self.user_data_dir, 'app_prefs.json')
         self.theme_mode = theme.load_theme_mode(self.theme_prefs_path)
         self.use_video_bg = theme.load_pref_bool(self.theme_prefs_path, "use_video_bg", True)
