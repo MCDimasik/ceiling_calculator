@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = сeiling Calculator
+title = Ceiling Calculator
 
 # (str) Package name
-package.name = ceiling_calculator_beta
+package.name = ceiling_calculator_alpha
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test
@@ -29,7 +29,7 @@ source.include_exts = py,png,jpg,kv,atlas,mp4
 #source.exclude_patterns = license,images/*/*.jpg
 
 # (str) Application versioning (method 1)
-version = 2.0.0
+version = 2.1.0
 
 # (str) Application versioning (method 2)
 # version.regex = __version__ = ['"](.*)['"]
