@@ -18,8 +18,9 @@ from screens.settings_screen import SettingsScreen
 import theme
 from ui_style import COLORS
 
-# Это строка для отладки на Windows, на Android ломает рендеринг и координаты касаний, убрать перед сборкой
-os.environ['KIVY_GL_BACKEND'] = 'angle_sdl2'
+# ANGLE нужен только для отладки на Windows. На Android может ломать рендер/видео.
+if platform == "win":
+    os.environ["KIVY_GL_BACKEND"] = "angle_sdl2"
 
 if platform != 'android':
     Window.size = (320, 640)

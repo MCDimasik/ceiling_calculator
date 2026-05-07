@@ -118,12 +118,22 @@ class MainScreen(Screen):
         self.add_widget(root)
 
     def on_pre_enter(self):
-        self._apply_bg_video()
         # На всякий случай синхронизируем стили кнопок с текущей темой
         for b in (getattr(self, "btn_calc1", None), getattr(self, "btn_calc2", None), getattr(self, "btn_settings", None)):
             if b is not None:
                 role = getattr(b, "_ui_btn_role", "surface")
                 apply_btn_style(b, role=role)
+
+    def on_enter(self, *args):
+        # На Android видео часто не стартует, если дергать его до первого кадра экрана.
+        Clock.schedule_once(lambda *_: self._apply_bg_video(), 0)
+
+    def on_leave(self, *args):
+        # Не держим декодер активным между экранами
+        try:
+            self.bg_video.state = "stop"
+        except Exception:
+            pass
 
     def _apply_bg_video(self):
         from kivy.app import App
@@ -156,13 +166,20 @@ class MainScreen(Screen):
         self.bg_video.source = path
         try:
             self.bg_video.state = "stop"
-            self.bg_video.state = "play"
         except Exception:
             pass
+        # Чуть позже запускаем play (иначе на части устройств первый старт игнорируется)
+        Clock.schedule_once(self._start_video_playback, 0)
         # Через небольшой таймаут проверяем, смогли ли получить texture
         self.bg_video.opacity = 0
         Clock.schedule_once(self._check_video_loaded, 0.35)
         Clock.schedule_once(self._check_video_loaded, 1.0)
+
+    def _start_video_playback(self, *_):
+        try:
+            self.bg_video.state = "play"
+        except Exception:
+            pass
 
     def _check_video_loaded(self, *_):
         # Если видео не загрузилось (нет texture), остаёмся на фолбэк-фоне
