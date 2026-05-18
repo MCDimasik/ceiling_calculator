@@ -19,6 +19,7 @@ from materials_calculator import (
 from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text
 from widgets.ui_components import RoundedButton, RoundedLabel, SegmentedControl
 from database import update_project_materials_config
+from app_access import is_admin
 import theme
 
 
@@ -79,15 +80,15 @@ class MaterialsProjectResultScreen(Screen):
         style_title(self.title)
         self.title.bind(size=self._update_title_text_size)
 
-        btn_cost = RoundedButton(text="Стоимость", size_hint=(0.30, 1), font_size=dp(14))
-        btn_cost.corner_radius = dp(12)
-        apply_btn_style(btn_cost, role="secondary")
-        wrap_button_text(btn_cost)
-        btn_cost.bind(on_press=lambda *_: setattr(self.manager, "current", "project_cost"))
+        self.btn_cost = RoundedButton(text="Стоимость", size_hint=(0.30, 1), font_size=dp(14))
+        self.btn_cost.corner_radius = dp(12)
+        apply_btn_style(self.btn_cost, role="secondary")
+        wrap_button_text(self.btn_cost)
+        self.btn_cost.bind(on_press=self._on_cost_press)
 
         toolbar.add_widget(btn_back)
         toolbar.add_widget(self.title)
-        toolbar.add_widget(btn_cost)
+        toolbar.add_widget(self.btn_cost)
 
         controls = BoxLayout(orientation="vertical", size_hint=(1, None), spacing=dp(10), padding=(dp(8), dp(10), dp(8), dp(8)))
         controls.bind(minimum_height=controls.setter("height"))
@@ -227,11 +228,23 @@ class MaterialsProjectResultScreen(Screen):
 
     def on_pre_enter(self):
         self._apply_bg()
+        self._apply_cost_button()
         project = getattr(self.manager, "current_project", None)
         self.title.text = project.name if project else "Проект"
         ceiling, susp, cell = self._project_config()
         self._apply_config_to_ui(ceiling, susp, cell)
         self.calculate()
+
+    def _apply_cost_button(self):
+        admin = is_admin()
+        self.btn_cost.disabled = not admin
+        self.btn_cost.opacity = 0.4 if not admin else 1.0
+        apply_btn_style(self.btn_cost, role="secondary" if admin else "surface")
+
+    def _on_cost_press(self, *_):
+        if not is_admin():
+            return
+        self.manager.current = "project_cost"
 
     def request_calculate(self):
         if self._calc_trigger is not None:

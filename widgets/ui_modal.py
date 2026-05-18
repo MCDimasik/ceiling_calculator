@@ -22,11 +22,13 @@ class RoundedModal(ModalView):
         root = FloatLayout()
         self.add_widget(root)
 
-        self.card = FloatLayout(
-            size_hint=card_size_hint,
-            height=dp(card_height_dp) if card_size_hint[1] is None else None,
-            pos_hint={"center_x": 0.5, "center_y": 0.55},
-        )
+        card_kwargs = {
+            "size_hint": card_size_hint,
+            "pos_hint": {"center_x": 0.5, "center_y": 0.55},
+        }
+        if card_size_hint[1] is None:
+            card_kwargs["height"] = dp(card_height_dp)
+        self.card = FloatLayout(**card_kwargs)
         root.add_widget(self.card)
         self.card.add_widget(content)
 

@@ -187,7 +187,107 @@ def _variant_note(item_key, calc_match_key):
     return "вариант цены, в расчёте — одна строка"
 
 
+def _longest_common_prefix(names):
+    if not names:
+        return ""
+    prefix = names[0]
+    for name in names[1:]:
+        while name[: len(prefix)] != prefix and prefix:
+            prefix = prefix[:-1]
+    return prefix.rstrip(" -–,")
 
+
+def _is_redundant_generic_variant(variant, all_variants):
+    """Скрываем «Плита Армстронг», если есть «Плита Армстронг Байкал» и т.п."""
+    if len(all_variants) <= 1:
+        return False
+    base = variant["name"]
+    for other in all_variants:
+        if other["item_key"] == variant["item_key"]:
+            continue
+        if other["name"].startswith(base + " "):
+            return True
+    return False
+
+
+def _variant_short_labels(variants):
+    names = [v["name"] for v in variants]
+    prefix = _longest_common_prefix(names)
+    labels = {}
+    for v in variants:
+        name = v["name"]
+        if len(variants) == 1:
+            labels[v["item_key"]] = name
+        elif name == prefix:
+            labels[v["item_key"]] = "Общая"
+        elif prefix and name.startswith(prefix):
+            short = name[len(prefix) :].lstrip(" -–,")
+            labels[v["item_key"]] = short or name
+        else:
+            labels[v["item_key"]] = name
+    return labels
+
+
+def _group_title(variants):
+    if len(variants) == 1:
+        return variants[0]["name"]
+    prefix = _longest_common_prefix([v["name"] for v in variants])
+    if prefix:
+        return prefix
+    return variants[0]["name"]
+
+
+def catalog_product_groups():
+    """
+    Группы номенклатуры: категория + строка расчёта (calc_match_key) + варианты.
+    picker_variants — без «общих» дублей, short_label — короткое имя в списке.
+    """
+    ordered = []
+    index = {}
+    for cat, item_key, name, match in CATALOG_ENTRIES:
+        gk = (cat, match)
+        if gk not in index:
+            grp = {
+                "category": cat,
+                "calc_match_key": match,
+                "variants": [],
+            }
+            index[gk] = grp
+            ordered.append(grp)
+        index[gk]["variants"].append({"item_key": item_key, "name": name})
+
+    for grp in ordered:
+        variants = grp["variants"]
+        grp["group_title"] = _group_title(variants)
+        short = _variant_short_labels(variants)
+        picker = [v for v in variants if not _is_redundant_generic_variant(v, variants)]
+        grp["picker_variants"] = [
+            {**v, "short_label": short[v["item_key"]]} for v in picker
+        ]
+        grp["variants"] = [{**v, "short_label": short[v["item_key"]]} for v in variants]
+    return ordered
+
+
+def catalog_picker_groups(exclude_keys=None):
+    """Группы для модалки «Добавить позицию» (только ещё не добавленные варианты)."""
+    exclude = set(exclude_keys or [])
+    out = []
+    for grp in catalog_product_groups():
+        picker = [v for v in grp["picker_variants"] if v["item_key"] not in exclude]
+        if picker:
+            out.append({**grp, "picker_variants": picker})
+    return out
+
+
+def supplier_price_groups(item_keys):
+    """Группы для экрана цен поставщика — только добавленные item_key."""
+    key_set = set(item_keys or [])
+    out = []
+    for grp in catalog_product_groups():
+        active = [v for v in grp["variants"] if v["item_key"] in key_set]
+        if active:
+            out.append({**grp, "variants": active})
+    return out
 
 
 def catalog_item_keys():

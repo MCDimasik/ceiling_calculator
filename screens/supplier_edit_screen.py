@@ -4,6 +4,8 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.widget import Widget
+from kivy.graphics import Color, RoundedRectangle, Rectangle
 from kivy.metrics import dp
 
 from ui_style import (
@@ -18,7 +20,12 @@ from ui_style import (
 from widgets.ui_components import RoundedButton, RoundedLabel
 from widgets.screen_bg import make_bg_root
 from widgets.ui_modal import RoundedModal
-from material_catalog import catalog_by_category, get_catalog_entry, get_billing_meta, CATALOG_ENTRIES
+from material_catalog import (
+    CATALOG_ENTRIES,
+    catalog_picker_groups,
+    get_catalog_entry,
+    supplier_price_groups,
+)
 from supplier_db import (
     load_supplier,
     save_supplier,
@@ -27,6 +34,7 @@ from supplier_db import (
     delete_supplier,
     Supplier,
 )
+from app_access import is_admin
 from supplier_prices_util import (
     normalize_price_record,
     client_from_cost,
@@ -34,16 +42,6 @@ from supplier_prices_util import (
     piece_price_for_display,
 )
 import theme
-
-
-def _catalog_items_flat():
-    """Все позиции каталога в порядке категорий."""
-    by_cat = catalog_by_category()
-    out = []
-    for cat, items in by_cat.items():
-        for it in items:
-            out.append({**it, "category": cat})
-    return out
 
 
 def _item_sort_key(item_key):
@@ -93,13 +91,13 @@ class SupplierEditScreen(Screen):
         toolbar.add_widget(btn_save)
 
         hint = Label(
-            text="Только добавленные позиции. Цена за шт или за уп. Клиент: +10% кнопкой.",
-            font_size=dp(11),
+            text="Позиции сгруппированы по типу в расчёте. Варианты — отдельные цены.",
+            font_size=dp(13),
             color=COLORS["text"],
             halign="left",
             valign="top",
         )
-        bind_label_autosize(hint, min_height_dp=32, pad_dp=8)
+        bind_label_autosize(hint, min_height_dp=36, pad_dp=8)
 
         name_row = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(8))
         name_row.add_widget(Label(text="Имя:", size_hint=(0.25, 1), color=COLORS["text"], font_size=dp(14)))
@@ -112,7 +110,7 @@ class SupplierEditScreen(Screen):
         apply_btn_style(btn_add, role="primary")
         btn_add.bind(on_press=self._open_add_picker)
 
-        self.form_box = BoxLayout(orientation="vertical", spacing=dp(12), size_hint_y=None)
+        self.form_box = BoxLayout(orientation="vertical", spacing=dp(16), size_hint_y=None)
         self.form_box.bind(minimum_height=self.form_box.setter("height"))
 
         scroll = ScrollView(size_hint=(1, 1))
@@ -134,6 +132,9 @@ class SupplierEditScreen(Screen):
         self.add_widget(self._root)
 
     def on_pre_enter(self):
+        if not is_admin():
+            self.manager.current = "main"
+            return
         self._root.apply_bg()
         self._supplier_id = getattr(self.manager, "supplier_edit_id", None)
         self._prices = {}
@@ -181,27 +182,14 @@ class SupplierEditScreen(Screen):
             self.form_box.add_widget(empty)
             return
 
-        keys = sorted(self._prices.keys(), key=_item_sort_key)
+        groups = supplier_price_groups(self._prices.keys())
         last_cat = None
-        for item_key in keys:
-            entry = get_catalog_entry(item_key)
-            if not entry:
-                continue
-            cat = entry["category"]
+        for grp in groups:
+            cat = grp["category"]
             if cat != last_cat:
                 last_cat = cat
-                hdr = Label(
-                    text=cat,
-                    size_hint_y=None,
-                    height=dp(26),
-                    font_size=dp(14),
-                    color=COLORS["text"],
-                    halign="left",
-                )
-                hdr.bind(size=lambda inst, val: setattr(inst, "text_size", (inst.width, None)))
-                self.form_box.add_widget(hdr)
-
-            self.form_box.add_widget(self._build_price_row(item_key, entry))
+                self.form_box.add_widget(self._category_header(cat))
+            self.form_box.add_widget(self._build_group_block(grp))
 
     def _billing_for(self, item_key, entry):
         mode = self._billing_ui.get(item_key, "piece")
@@ -210,17 +198,108 @@ class SupplierEditScreen(Screen):
             return "piece"
         return mode
 
+    def _bind_box_height(self, box):
+        box.bind(minimum_height=box.setter("height"))
+
+    def _line_label(self, text, *, font_size=15, height_dp=22, bold=False, muted=False):
+        lbl = Label(
+            text=text,
+            font_size=dp(font_size),
+            color=COLORS.get("muted", (0.5, 0.5, 0.5, 1)) if muted else COLORS["text"],
+            size_hint_y=None,
+            height=dp(height_dp),
+            halign="left",
+            valign="middle",
+            bold=bold,
+        )
+        if muted:
+            lbl._theme_slot = "muted"
+        lbl.bind(size=lambda inst, val: setattr(inst, "text_size", (inst.width, None)))
+        return lbl
+
+    def _category_header(self, text):
+        return self._line_label(text, font_size=17, height_dp=32, bold=True)
+
+    def _variant_divider(self):
+        line = Widget(size_hint_y=None, height=dp(1))
+        with line.canvas:
+            Color(*COLORS.get("border", (0.85, 0.84, 0.85, 1)))
+            line._rect = Rectangle(pos=line.pos, size=line.size)
+        line.bind(
+            pos=lambda inst, val: setattr(inst._rect, "pos", inst.pos),
+            size=lambda inst, val: setattr(inst._rect, "size", inst.size),
+        )
+        return line
+
+    def _style_surface_block(self, block):
+        pad = dp(12)
+        block.padding = (pad, pad)
+        block.spacing = dp(10)
+        self._bind_box_height(block)
+
+        def _draw(*_):
+            block.canvas.before.clear()
+            with block.canvas.before:
+                Color(*COLORS["surface"])
+                RoundedRectangle(
+                    pos=block.pos,
+                    size=block.size,
+                    radius=[(dp(14), dp(14))] * 4,
+                )
+
+        block.bind(pos=_draw, size=_draw)
+        _draw()
+
+    def _build_group_block(self, grp):
+        block = BoxLayout(orientation="vertical", size_hint_y=None)
+        self._style_surface_block(block)
+
+        variants = grp["variants"]
+        multi = len(variants) > 1
+
+        if multi:
+            block.add_widget(self._line_label(grp["group_title"], font_size=16, height_dp=24, bold=True))
+        else:
+            entry0 = get_catalog_entry(variants[0]["item_key"])
+            title = entry0["name"] if entry0 else grp["group_title"]
+            block.add_widget(self._line_label(title, font_size=16, height_dp=24, bold=True))
+
+        block.add_widget(
+            self._line_label(
+                f"В расчёте: {grp['calc_match_key']}",
+                font_size=12,
+                height_dp=18,
+                muted=True,
+            )
+        )
+
+        for idx, variant in enumerate(variants):
+            entry = get_catalog_entry(variant["item_key"])
+            if not entry:
+                continue
+            if idx > 0:
+                block.add_widget(self._variant_divider())
+            row = self._build_price_row(
+                variant["item_key"],
+                entry,
+                show_title=multi,
+                title_text=variant.get("short_label") or entry["name"],
+            )
+            block.add_widget(row)
+
+        return block
+
     def _unit_bar(self, item_key, entry, on_change=None):
         upp = float(entry.get("units_per_pack") or 1)
-        bar = BoxLayout(size_hint=(1, None), height=dp(34), spacing=dp(6))
+        bar = BoxLayout(size_hint=(1, None), height=dp(38), spacing=dp(6))
         if upp <= 1:
-            lbl = Label(text="за шт", font_size=dp(10), color=(0.5, 0.5, 0.5, 1), size_hint=(1, 1))
+            lbl = Label(text="за шт", font_size=dp(13), color=(0.5, 0.5, 0.5, 1), size_hint=(1, 1))
             lbl._theme_slot = "muted"
             bar.add_widget(lbl)
             return bar
 
-        btn_piece = RoundedButton(text="за шт", font_size=dp(11), size_hint=(0.5, 1))
-        btn_pack = RoundedButton(text=f"за уп ({int(upp)})", font_size=dp(11), size_hint=(0.5, 1))
+        btn_piece = RoundedButton(text="за шт", font_size=dp(13), size_hint=(0.5, 1))
+        btn_pack = RoundedButton(text=f"за уп ({int(upp)})", font_size=dp(13), size_hint=(0.5, 1))
         for b in (btn_piece, btn_pack):
             b.corner_radius = dp(8)
 
@@ -255,54 +334,24 @@ class SupplierEditScreen(Screen):
         upp = float(entry.get("units_per_pack") or 1)
         return piece_price_for_display(cost_piece, mode, upp)
 
-    def _sync_card_height(self, card, widgets):
-        def _refresh(*_):
-            total = dp(16)
-            for w in widgets:
-                if getattr(w, "height", None):
-                    total += w.height
-                else:
-                    total += dp(32)
-            card.height = total
-
-        for w in widgets:
-            if hasattr(w, "bind"):
-                w.bind(height=_refresh)
-        _refresh()
-        return _refresh
-
-    def _build_price_row(self, item_key, entry):
+    def _build_price_row(self, item_key, entry, show_title=False, title_text=None):
         stored = normalize_price_record(self._prices.get(item_key, {}))
         card = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
             spacing=dp(8),
-            padding=(dp(6), dp(10)),
         )
+        self._bind_box_height(card)
 
-        nm = Label(
-            text=entry["name"],
-            font_size=dp(14),
-            color=COLORS["text"],
-            halign="left",
-            valign="top",
-            bold=True,
-        )
-        bind_label_autosize(nm, min_height_dp=26, pad_dp=8)
+        stored_name = (stored.get("product_name") or "").strip()
+        default_name = entry["name"]
+        custom_receipt_name = bool(stored_name and stored_name != default_name)
 
-        sub = Label(
-            text=f"В расчёте: {entry['calc_match_key'] or '—'}",
-            font_size=dp(11),
-            color=(0.55, 0.55, 0.55, 1),
-            halign="left",
-            valign="top",
-        )
-        sub._theme_slot = "muted"
-        bind_label_autosize(sub, min_height_dp=18, pad_dp=6)
-
-        pname = make_price_input("Номенклатура поставщика", font_size_dp=13, height_dp=40)
-        pname.input_filter = None
-        pname.text = stored.get("product_name") or entry["name"]
+        pname = None
+        if custom_receipt_name:
+            pname = make_price_input("Название в чеке поставщика", font_size_dp=14, height_dp=44)
+            pname.input_filter = None
+            pname.text = stored_name
 
         def on_unit_change():
             c2 = self._display_cost(item_key, entry)
@@ -310,27 +359,33 @@ class SupplierEditScreen(Screen):
 
         unit_bar = self._unit_bar(item_key, entry, on_change=on_unit_change)
 
+        prices = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(72), spacing=dp(10))
+
+        col_cost = BoxLayout(orientation="vertical", spacing=dp(4))
         lbl_cost = Label(
-            text="Наша цена",
-            font_size=dp(11),
+            text="Наша",
+            font_size=dp(13),
             color=COLORS["text"],
             size_hint_y=None,
-            height=dp(18),
+            height=dp(20),
             halign="left",
         )
-        cost_in = make_price_input("0", font_size_dp=15, height_dp=44)
+        cost_in = make_price_input("0", font_size_dp=16, height_dp=48)
         c = self._display_cost(item_key, entry)
         cost_in.text = f"{c:g}" if c else ""
+        col_cost.add_widget(lbl_cost)
+        col_cost.add_widget(cost_in)
 
+        col_client = BoxLayout(orientation="vertical", spacing=dp(4))
         lbl_client = Label(
-            text="Цена для клиента",
-            font_size=dp(11),
+            text="Клиент",
+            font_size=dp(13),
             color=COLORS["text"],
             size_hint_y=None,
-            height=dp(18),
+            height=dp(20),
             halign="left",
         )
-        client_in = make_price_input("0", font_size_dp=15, height_dp=44)
+        client_in = make_price_input("0", font_size_dp=16, height_dp=48)
         cl_piece = float(stored.get("unit_price_client") or 0)
         cl_show = piece_price_for_display(
             cl_piece,
@@ -338,9 +393,14 @@ class SupplierEditScreen(Screen):
             float(entry.get("units_per_pack") or 1),
         )
         client_in.text = f"{cl_show:g}" if cl_show else ""
+        col_client.add_widget(lbl_client)
+        col_client.add_widget(client_in)
 
-        actions = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        btn_fill = RoundedButton(text="+10% к клиенту", font_size=dp(12))
+        prices.add_widget(col_cost)
+        prices.add_widget(col_client)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        btn_fill = RoundedButton(text="+10%", font_size=dp(14))
         btn_fill.corner_radius = dp(12)
         apply_btn_style(btn_fill, role="secondary")
         wrap_button_text(btn_fill, horizontal_padding_dp=6)
@@ -357,7 +417,7 @@ class SupplierEditScreen(Screen):
 
         btn_fill.bind(on_press=fill_client)
 
-        btn_rm = RoundedButton(text="Удалить", font_size=dp(12))
+        btn_rm = RoundedButton(text="Удалить", font_size=dp(14))
         btn_rm.corner_radius = dp(12)
         apply_btn_style(btn_rm, role="danger")
         wrap_button_text(btn_rm, horizontal_padding_dp=6)
@@ -371,71 +431,85 @@ class SupplierEditScreen(Screen):
         actions.add_widget(btn_fill)
         actions.add_widget(btn_rm)
 
-        for w in (nm, sub, pname, unit_bar, lbl_cost, cost_in, lbl_client, client_in, actions):
-            card.add_widget(w)
-
-        track = [nm, sub, pname, unit_bar, lbl_cost, cost_in, lbl_client, client_in, actions]
-        self._sync_card_height(card, track)
+        if show_title and title_text:
+            card.add_widget(
+                self._line_label(title_text, font_size=15, height_dp=22, bold=True)
+            )
+        if pname is not None:
+            card.add_widget(pname)
+        card.add_widget(unit_bar)
+        card.add_widget(prices)
+        card.add_widget(actions)
 
         self._cost_inputs[item_key] = cost_in
         self._client_inputs[item_key] = client_in
         self._name_inputs[item_key] = pname
         return card
 
+    def _fill_picker_list(self, list_box, exclude_keys):
+        """Категория → группа (строка расчёта) → варианты без «общих» дублей."""
+        pending_binds = []
+        groups = catalog_picker_groups(exclude_keys)
+        last_cat = None
+        for grp in groups:
+            cat = grp["category"]
+            if cat != last_cat:
+                last_cat = cat
+                list_box.add_widget(self._category_header(cat))
+
+            sub = Label(
+                text=grp["calc_match_key"],
+                font_size=dp(13),
+                color=COLORS.get("muted", (0.45, 0.45, 0.45, 1)),
+                size_hint_y=None,
+                height=dp(26),
+                halign="left",
+            )
+            sub._theme_slot = "muted"
+            sub.bind(size=lambda inst, val: setattr(inst, "text_size", (inst.width, None)))
+            list_box.add_widget(sub)
+
+            for variant in grp["picker_variants"]:
+                label = variant.get("short_label") or variant["name"]
+                btn = RoundedButton(
+                    text=label,
+                    size_hint_y=None,
+                    height=dp(54),
+                    font_size=dp(15),
+                )
+                btn.corner_radius = dp(12)
+                apply_btn_style(btn, role="surface")
+                wrap_button_text(btn, horizontal_padding_dp=8)
+                pending_binds.append((btn, variant["item_key"]))
+                list_box.add_widget(btn)
+        return pending_binds
+
     def _open_add_picker(self, *_):
-        available = [it for it in _catalog_items_flat() if it["item_key"] not in self._prices]
-        if not available:
+        groups = catalog_picker_groups(self._prices.keys())
+        if not groups:
             self._show_info("Все позиции каталога уже добавлены.")
             return
 
         content = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
         title = Label(
-            text="Выберите позицию",
-            font_size=dp(16),
+            text="Выберите вариант",
+            font_size=dp(17),
             color=COLORS["text"],
             size_hint_y=None,
-            height=dp(28),
+            height=dp(30),
             bold=True,
         )
         content.add_widget(title)
 
-        list_box = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        list_box = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         list_box.bind(minimum_height=list_box.setter("height"))
-
-        pending_binds = []
-        last_cat = None
-        for it in available:
-            if it["category"] != last_cat:
-                last_cat = it["category"]
-                hdr = Label(
-                    text=last_cat,
-                    font_size=dp(12),
-                    color=(0.45, 0.45, 0.45, 1),
-                    size_hint_y=None,
-                    height=dp(22),
-                    halign="left",
-                )
-                hdr._theme_slot = "muted"
-                hdr.bind(size=lambda inst, val: setattr(inst, "text_size", (inst.width, None)))
-                list_box.add_widget(hdr)
-
-            btn = RoundedButton(
-                text=it["name"],
-                size_hint_y=None,
-                height=dp(52),
-                font_size=dp(13),
-            )
-            btn.corner_radius = dp(12)
-            apply_btn_style(btn, role="surface")
-            wrap_button_text(btn, horizontal_padding_dp=8)
-            pending_binds.append((btn, it["item_key"]))
-            list_box.add_widget(btn)
+        pending_binds = self._fill_picker_list(list_box, self._prices.keys())
 
         scroll = ScrollView(size_hint=(1, 1))
         scroll.add_widget(list_box)
         content.add_widget(scroll)
 
-        btn_cancel = RoundedButton(text="Отмена", size_hint=(1, None), height=dp(40))
+        btn_cancel = RoundedButton(text="Отмена", size_hint=(1, None), height=dp(44))
         btn_cancel.corner_radius = dp(12)
         apply_btn_style(btn_cancel, role="secondary")
         content.add_widget(btn_cancel)
@@ -534,12 +608,13 @@ class SupplierEditScreen(Screen):
                 if client_entered > 0
                 else None
             )
+            mode = self._billing_for(item_key, entry)
             self._prices[item_key] = normalize_price_record(
                 {
                     "product_name": entry["name"],
                     "unit_price_cost": cost_piece,
                     "unit_price_client": client_piece,
-                    "receipt_unit": "piece",
+                    "receipt_unit": "pack" if mode == "pack" and upp > 1 else "piece",
                     "units_per_pack": upp,
                 }
             )
@@ -591,12 +666,17 @@ class SupplierEditScreen(Screen):
                 if client_entered > 0
                 else None
             )
+            name_in = self._name_inputs.get(item_key)
+            product_name = entry["name"]
+            if name_in is not None:
+                product_name = name_in.text.strip() or entry["name"]
+            mode = self._billing_for(item_key, entry)
             out[item_key] = normalize_price_record(
                 {
-                    "product_name": self._name_inputs[item_key].text.strip() or entry["name"],
+                    "product_name": product_name,
                     "unit_price_cost": cost_piece,
                     "unit_price_client": client_piece,
-                    "receipt_unit": "piece",
+                    "receipt_unit": "pack" if mode == "pack" and upp > 1 else "piece",
                     "units_per_pack": upp,
                 }
             )

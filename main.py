@@ -8,6 +8,7 @@ from kivy.utils import platform
 
 import theme
 from ui_style import COLORS
+from app_access import load_admin_unlocked
 
 # ANGLE нужен только для отладки на Windows. На Android может ломать рендер/видео.
 if platform == "win":
@@ -58,6 +59,7 @@ class CeilingCalculatorApp(App):
         self.theme_prefs_path = os.path.join(self.user_data_dir, 'app_prefs.json')
         self.theme_mode = theme.load_theme_mode(self.theme_prefs_path)
         self.use_video_bg = theme.load_pref_bool(self.theme_prefs_path, "use_video_bg", True)
+        self.admin_unlocked = load_admin_unlocked(self.theme_prefs_path)
         # Кэшируем текстуры фоновых картинок, чтобы не было микрофризов на переходах.
         try:
             from kivy.core.image import Image as CoreImage

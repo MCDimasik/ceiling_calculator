@@ -1,13 +1,16 @@
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.video import Video
 from kivy.uix.image import Image
 from kivy.metrics import dp
-from ui_style import COLORS, apply_btn_style, style_title
+from ui_style import COLORS, apply_btn_style, style_title, style_text_input
 from widgets.ui_components import RoundedButton
+from widgets.ui_modal import RoundedModal
+from app_access import is_admin, try_unlock_admin
 import theme
 from kivy.clock import Clock
 from kivy.resources import resource_find
@@ -17,6 +20,8 @@ import os
 
 class MainScreen(Screen):
     """Главный экран с выбором калькулятора"""
+
+    SETTINGS_LONG_PRESS_SEC = 1.0
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -70,12 +75,14 @@ class MainScreen(Screen):
         )
         root.add_widget(main_layout)
 
+        self._settings_press_event = None
+        self._settings_long_press_fired = False
+
         # Контейнер для кнопок
-        buttons_layout = BoxLayout(
+        self.buttons_layout = BoxLayout(
             orientation='vertical',
             spacing=dp(12),
             size_hint=(1, None),
-            height=dp(54) * 5 + dp(12) * 4,
         )
 
         # Кнопка 1: Расчет раскладки потолка
@@ -130,22 +137,25 @@ class MainScreen(Screen):
         self.btn_settings.corner_radius = dp(18)
         apply_btn_style(self.btn_settings, role="surface")
         self.btn_settings.bind(on_press=self.go_to_settings)
+        self.btn_settings.bind(on_touch_down=self._on_settings_touch_down)
+        self.btn_settings.bind(on_touch_up=self._on_settings_touch_up)
 
         # Собираем интерфейс
-        buttons_layout.add_widget(self.btn_calc1)
-        buttons_layout.add_widget(self.btn_calc2)
-        buttons_layout.add_widget(self.btn_import)
-        buttons_layout.add_widget(self.btn_suppliers)
-        buttons_layout.add_widget(self.btn_settings)
+        self.buttons_layout.add_widget(self.btn_calc1)
+        self.buttons_layout.add_widget(self.btn_calc2)
+        self.buttons_layout.add_widget(self.btn_import)
+        self.buttons_layout.add_widget(self.btn_suppliers)
+        self.buttons_layout.add_widget(self.btn_settings)
 
         # Без логотипа: больше воздуха под кнопки
         main_layout.add_widget(Label(size_hint=(1, 1)))  # spacer
-        main_layout.add_widget(buttons_layout)
+        main_layout.add_widget(self.buttons_layout)
         main_layout.add_widget(Label(size_hint=(1, 1)))  # spacer
 
         self.add_widget(root)
 
     def on_pre_enter(self):
+        self._apply_admin_ui()
         # На всякий случай синхронизируем стили кнопок с текущей темой
         for b in (
             getattr(self, "btn_calc1", None),
@@ -157,6 +167,98 @@ class MainScreen(Screen):
             if b is not None:
                 role = getattr(b, "_ui_btn_role", "surface")
                 apply_btn_style(b, role=role)
+
+    def _apply_admin_ui(self):
+        admin = is_admin()
+        show_suppliers = admin
+        self.btn_suppliers.disabled = not show_suppliers
+        self.btn_suppliers.opacity = 1 if show_suppliers else 0
+        self.btn_suppliers.height = dp(54) if show_suppliers else 0
+        self.btn_suppliers.size_hint_y = None
+
+        n = 5 if show_suppliers else 4
+        self.buttons_layout.height = dp(54) * n + dp(12) * (n - 1)
+
+    def _on_settings_touch_down(self, btn, touch):
+        if not btn.collide_point(*touch.pos):
+            return False
+        self._settings_long_press_fired = False
+        if self._settings_press_event is not None:
+            Clock.unschedule(self._settings_press_event)
+        self._settings_press_event = Clock.schedule_once(
+            self._on_settings_long_press, self.SETTINGS_LONG_PRESS_SEC
+        )
+        return False
+
+    def _on_settings_touch_up(self, btn, touch):
+        if self._settings_press_event is not None:
+            Clock.unschedule(self._settings_press_event)
+            self._settings_press_event = None
+        return False
+
+    def _on_settings_long_press(self, *_dt):
+        self._settings_press_event = None
+        self._settings_long_press_fired = True
+        if is_admin():
+            self._show_stub_popup("Режим администратора", "Полный доступ уже включён.")
+            return
+        self._open_admin_unlock_dialog()
+
+    def _open_admin_unlock_dialog(self):
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(10))
+        content.add_widget(
+            Label(
+                text="Режим администратора\n(цены и поставщики)",
+                font_size=dp(14),
+                color=COLORS["text"],
+                halign="center",
+                size_hint_y=None,
+                height=dp(44),
+            )
+        )
+        pwd = TextInput(
+            password=True,
+            multiline=False,
+            hint_text="Пароль",
+            font_size=dp(16),
+            size_hint_y=None,
+            height=dp(48),
+        )
+        style_text_input(pwd)
+        content.add_widget(pwd)
+
+        btns = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        btn_cancel = RoundedButton(text="Отмена")
+        btn_cancel.corner_radius = dp(12)
+        apply_btn_style(btn_cancel, role="secondary")
+        btn_ok = RoundedButton(text="Войти")
+        btn_ok.corner_radius = dp(12)
+        apply_btn_style(btn_ok, role="primary")
+        btns.add_widget(btn_cancel)
+        btns.add_widget(btn_ok)
+        content.add_widget(btns)
+
+        modal = RoundedModal(content=content, card_size_hint=(0.88, None), card_height_dp=260)
+
+        def submit(*_):
+            from kivy.app import App
+
+            app = App.get_running_app()
+            prefs = getattr(app, "theme_prefs_path", "")
+            if try_unlock_admin(pwd.text, prefs, app):
+                modal.dismiss()
+                self._apply_admin_ui()
+                self._show_stub_popup(
+                    "Готово",
+                    "Режим администратора включён.\nДоступ сохранится на этом устройстве.",
+                )
+            else:
+                self._show_stub_popup("Ошибка", "Неверный пароль.")
+
+        btn_ok.bind(on_press=submit)
+        btn_cancel.bind(on_press=lambda *_: modal.dismiss())
+        modal.open()
+        Clock.schedule_once(lambda *_: setattr(pwd, "focus", True), 0.1)
 
     def on_enter(self, *args):
         # На Android видео часто не стартует, если дергать его до первого кадра экрана.
@@ -345,6 +447,9 @@ class MainScreen(Screen):
         self.manager.current = 'materials_projects'
 
     def go_to_settings(self, instance):
+        if self._settings_long_press_fired:
+            self._settings_long_press_fired = False
+            return
         self.manager.current = "settings"
 
     def _show_stub_popup(self, title, message):

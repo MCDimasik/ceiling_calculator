@@ -323,5 +323,7 @@ def prices_by_calc_match_key(supplier_id, for_client=True):
                 "unit_price": unit,
                 "unit_price_cost": rec.get("unit_price_cost"),
                 "unit_price_client": rec.get("unit_price_client"),
+                "receipt_unit": rec.get("receipt_unit") or "piece",
+                "units_per_pack": float(rec.get("units_per_pack") or 1),
             }
     return by_match

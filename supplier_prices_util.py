@@ -1,5 +1,7 @@
 """Нормализация цен поставщика: закуп / клиент, упаковка → штука."""
 
+import math
+
 CLIENT_MARKUP_DEFAULT = 0.10
 
 
@@ -19,6 +21,46 @@ def piece_price_for_display(piece_price, receipt_unit="piece", units_per_pack=1)
         n = float(units_per_pack or 1)
         if n > 1:
             return round(price * n, 2)
+    return price
+
+
+def bills_by_pack(receipt_unit="piece", units_per_pack=1):
+    """
+    Оплата упаковками: явно в чеке (уп) или в каталоге units_per_pack > 1
+    (плиты Армстронг 20 шт — цена в БД за штуку, считаем целые пачки).
+    """
+    upp = float(units_per_pack or 1)
+    if upp <= 1:
+        return False
+    if (receipt_unit or "piece").lower() in ("pack", "уп", "упак"):
+        return True
+    return True
+
+
+def qty_to_bill_units(qty_pieces, receipt_unit="piece", units_per_pack=1):
+    """
+    Штуки из расчёта материалов → количество для оплаты.
+    Для упаковки: округление вверх до целых пачек (19+5 шт → 2 уп по 20).
+    """
+    qty = int(qty_pieces or 0)
+    if qty <= 0:
+        return 0, "шт"
+    if bills_by_pack(receipt_unit, units_per_pack):
+        upp = max(1, int(float(units_per_pack)))
+        return int(math.ceil(qty / upp)), "уп"
+    return qty, "шт"
+
+
+def unit_price_for_billing(piece_price, receipt_unit="piece", units_per_pack=1):
+    """Цена за штуку в БД → цена за единицу оплаты (шт или уп)."""
+    price = float(piece_price or 0)
+    if price <= 0:
+        return 0.0
+    if bills_by_pack(receipt_unit, units_per_pack):
+        n = float(units_per_pack or 1)
+        if (receipt_unit or "piece").lower() in ("pack", "уп", "упак"):
+            return piece_price_for_display(price, receipt_unit, units_per_pack)
+        return round(price * n, 2)
     return price
 
 

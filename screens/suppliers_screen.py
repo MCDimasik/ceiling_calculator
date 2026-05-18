@@ -10,6 +10,7 @@ from ui_style import COLORS, apply_btn_style, wrap_button_text, style_title
 from widgets.ui_components import RoundedButton, RoundedLabel
 from widgets.screen_bg import make_bg_root
 from supplier_db import list_suppliers, init_supplier_tables
+from app_access import is_admin
 import theme
 
 
@@ -74,6 +75,9 @@ class SuppliersScreen(Screen):
         self.add_widget(self._root)
 
     def on_pre_enter(self):
+        if not is_admin():
+            self.manager.current = "main"
+            return
         self._root.apply_bg()
         init_supplier_tables()
         self._reload_list()

@@ -10,6 +10,7 @@ from widgets.ui_components import RoundedButton, RoundedLabel
 from widgets.ui_modal import RoundedModal
 from widgets.screen_bg import make_bg_root
 from receipt_import import import_receipt_pdf
+from app_access import is_admin
 
 
 class ReceiptImportScreen(Screen):
@@ -59,6 +60,9 @@ class ReceiptImportScreen(Screen):
         self.add_widget(self._root)
 
     def on_pre_enter(self):
+        if not is_admin():
+            self.manager.current = "main"
+            return
         self._root.apply_bg()
 
     def _pick_pdf(self, *_):
