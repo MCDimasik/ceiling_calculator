@@ -16,7 +16,9 @@ class LayoutWidget(Widget):
     grid_offset_x = NumericProperty(0)
     grid_offset_y = NumericProperty(0)
     on_grid_move = ObjectProperty(None)
+    on_lights_changed = ObjectProperty(None)
     dragging_enabled = BooleanProperty(True)
+    light_placement_mode = BooleanProperty(False)
     show_dimensions = BooleanProperty(True)
     show_wall_dimensions = BooleanProperty(True)
 
@@ -44,6 +46,10 @@ class LayoutWidget(Widget):
         self.grid_color = (0.79, 0.84, 0.87, 0.7)
         self.full_tile_color = (0.9, 0.9, 0.9, 0.3)
         self.cut_tile_color = (0.7, 0.7, 0.7, 0.3)
+        self.light_tile_color = (1.0, 0.96, 0.72, 0.85)
+        self.light_fixtures = set()
+        self._light_touch_start = None
+        self.TILE_SIZE = 60
         self.text_color = (0.94, 0.96, 0.98, 1)
         self.bind(size=self._update_canvas)
 
@@ -458,12 +464,89 @@ class LayoutWidget(Widget):
             base + 3, base
         ])
 
+    def tile_cell_key(self, tile):
+        """Индекс ячейки относительно смещения сетки — сохраняется при движении сетки."""
+        gx = self.grid_offset_x
+        gy = self.grid_offset_y
+        ts = self.TILE_SIZE
+        return (
+            int(round((tile['x1'] - gx) / ts)),
+            int(round((tile['y1'] - gy) / ts)),
+        )
+
+    def set_light_fixtures(self, fixtures):
+        self.light_fixtures = set()
+        for item in fixtures or []:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                self.light_fixtures.add((int(item[0]), int(item[1])))
+
+    def light_fixtures_list(self):
+        return sorted([list(k) for k in self.light_fixtures])
+
+    def prune_outside_light_fixtures(self):
+        """Убирает светильники, чья ячейка полностью вышла за контур помещения."""
+        if not self.light_fixtures:
+            return False
+        if not self.layout or not self.layout.tiles:
+            return False
+        valid_keys = set()
+        for tile in self.layout.tiles:
+            if tile["type"] == "outside":
+                continue
+            if tile["type"] == "cut":
+                if tile.get("cut_x", 0) < 1.0 or tile.get("cut_y", 0) < 1.0:
+                    continue
+            valid_keys.add(self.tile_cell_key(tile))
+        stale = self.light_fixtures - valid_keys
+        if not stale:
+            return False
+        self.light_fixtures -= stale
+        if self.on_lights_changed:
+            self.on_lights_changed()
+        return True
+
+    def world_cm_from_touch(self, touch):
+        return (
+            (touch.x - self.offset_x) / self.scale,
+            (touch.y - self.offset_y) / self.scale,
+        )
+
+    def find_tile_at_world(self, wx, wy):
+        if not self.layout or not self.layout.tiles:
+            return None
+        for tile in self.layout.tiles:
+            if tile['type'] == 'outside':
+                continue
+            if tile['x1'] <= wx < tile['x2'] and tile['y1'] <= wy < tile['y2']:
+                if tile['type'] == 'cut':
+                    cut_x = tile.get('cut_x', 0)
+                    cut_y = tile.get('cut_y', 0)
+                    if cut_x < 1.0 or cut_y < 1.0:
+                        continue
+                return tile
+        return None
+
+    def toggle_light_at_touch(self, touch):
+        wx, wy = self.world_cm_from_touch(touch)
+        tile = self.find_tile_at_world(wx, wy)
+        if not tile:
+            return
+        key = self.tile_cell_key(tile)
+        if key in self.light_fixtures:
+            self.light_fixtures.discard(key)
+        else:
+            self.light_fixtures.add(key)
+        if self.on_lights_changed:
+            self.on_lights_changed()
+        self.draw_layout()
+
     def draw_grid_tiles(self):
         if not self.layout or not self.layout.tiles:
             return
         visible_bounds = self._visible_world_bounds()
         full_vertices, full_indices = [], []
         cut_vertices, cut_indices = [], []
+        light_vertices, light_indices = [], []
         line_vertices, line_indices = [], []
 
         for tile in self.layout.tiles:
@@ -482,7 +565,11 @@ class LayoutWidget(Widget):
             px2 = self.cm_to_px(x2, y2)
             rx1, rx2 = min(px1[0], px2[0]), max(px1[0], px2[0])
             ry1, ry2 = min(px1[1], px2[1]), max(px1[1], px2[1])
-            if tile['type'] == 'full':
+            cell_key = self.tile_cell_key(tile)
+            is_light = cell_key in self.light_fixtures
+            if is_light:
+                self._append_rect_mesh(light_vertices, light_indices, rx1, ry1, rx2, ry2)
+            elif tile['type'] == 'full':
                 self._append_rect_mesh(full_vertices, full_indices, rx1, ry1, rx2, ry2)
             else:
                 self._append_rect_mesh(cut_vertices, cut_indices, rx1, ry1, rx2, ry2)
@@ -494,6 +581,9 @@ class LayoutWidget(Widget):
         if cut_vertices:
             Color(*self.cut_tile_color)
             Mesh(vertices=cut_vertices, indices=cut_indices, mode='triangles')
+        if light_vertices:
+            Color(*self.light_tile_color)
+            Mesh(vertices=light_vertices, indices=light_indices, mode='triangles')
         if line_vertices:
             Color(*self.grid_color)
             Mesh(vertices=line_vertices, indices=line_indices, mode='lines')
@@ -591,7 +681,11 @@ class LayoutWidget(Widget):
                 self.pinch_start_scale = self.scale
                 self.pinch_center = self.get_center(touches[0], touches[1])
                 return True
-            if self.dragging_enabled:
+            if self.light_placement_mode:
+                self._light_touch_start = touch.pos
+                self.panning = True
+                self.last_pan_pos = touch.pos
+            elif self.dragging_enabled:
                 self.dragging = True
                 self.last_touch_pos = touch.pos
             else:
@@ -643,6 +737,17 @@ class LayoutWidget(Widget):
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
+        if (
+            self.light_placement_mode
+            and self._light_touch_start is not None
+            and touch.id in self.touches
+            and len(self.touches) <= 1
+        ):
+            dx = touch.x - self._light_touch_start[0]
+            dy = touch.y - self._light_touch_start[1]
+            tap_threshold = dp(14) ** 2
+            if dx * dx + dy * dy <= tap_threshold:
+                self.toggle_light_at_touch(touch)
         self.touches.pop(touch.id, None)
         self.pinch_start_distance = None
         self.pinch_center = None
@@ -650,4 +755,5 @@ class LayoutWidget(Widget):
         self.panning = False
         self.last_touch_pos = None
         self.last_pan_pos = None
+        self._light_touch_start = None
         return super().on_touch_up(touch)

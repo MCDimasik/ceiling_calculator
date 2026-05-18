@@ -10,6 +10,7 @@ from widgets.layout_widget import LayoutWidget
 from widgets.ui_components import RoundedButton, IconRoundedButton
 from ui_style import apply_btn_style, wrap_button_text
 from models import CeilingLayout
+from materials_calculator import effective_tile_counts_after_lights
 from database import save_project  # Импортируем функцию сохранения
 from kivy.clock import Clock  # ← ДОБАВИТЬ импорт
 from kivy.resources import resource_find
@@ -22,6 +23,7 @@ class LayoutScreen(Screen):
         super().__init__(**kwargs)
         self.snap_mode = 0
         self.control_mode = 'grid'
+        self.lights_mode = False
 
         # ← КРИТИЧНО: Переменные для авто-повтора кнопок
         self.repeat_event = None
@@ -52,10 +54,10 @@ class LayoutScreen(Screen):
         main_layout.add_widget(control_panel)
         main_layout.add_widget(stats_panel)
 
-        # Оборачиваем в FloatLayout для правильного z-ordering
-        from kivy.uix.floatlayout import FloatLayout
         overlay = FloatLayout()
         overlay.add_widget(main_layout)
+        self.light_panel = self.create_light_button_panel()
+        overlay.add_widget(self.light_panel)
         self.add_widget(overlay)
 
     def toggle_dimensions(self, instance):
@@ -118,6 +120,13 @@ class LayoutScreen(Screen):
             return
         current_room = self.manager.current_room
         if current_room:
+            if self.lights_mode:
+                self.lights_mode = False
+                self.layout_widget.light_placement_mode = False
+                apply_btn_style(self.btn_light, role="secondary")
+                self.control_mode = 'grid'
+                self.layout_widget.dragging_enabled = True
+                self.mode_button.text = 'Сетка'
             print(f"Загрузка комнаты: {current_room.name}")
             print(f"Стены: {len(current_room.walls)}")
 
@@ -137,15 +146,20 @@ class LayoutScreen(Screen):
                 current_room, 'grid_offset_y', 0)
             self.layout_widget.grid_offset_x = self.ceiling_layout.grid_offset_x
             self.layout_widget.grid_offset_y = self.ceiling_layout.grid_offset_y
+            self.layout_widget.set_light_fixtures(
+                getattr(current_room, 'light_fixtures', []) or []
+            )
 
             # Рассчитываем раскладку
             self.ceiling_layout.calculate_layout()
 
             # Передаем layout в виджет
             self.layout_widget.layout = self.ceiling_layout
+            self.layout_widget.prune_outside_light_fixtures()
 
             # Устанавливаем callback для обновления статистики при движении сетки
             self.layout_widget.on_grid_move = self.on_grid_moved
+            self.layout_widget.on_lights_changed = self.update_stats
 
             # Обновляем статистику
             self.update_stats()
@@ -192,6 +206,7 @@ class LayoutScreen(Screen):
         self.ceiling_layout.grid_offset_y = self.layout_widget.grid_offset_y
         self.ceiling_layout.calculate_layout()
         self.layout_widget.layout = self.ceiling_layout
+        self.layout_widget.prune_outside_light_fixtures()
         self.update_stats()
         self.layout_widget.draw_layout()
 
@@ -287,12 +302,53 @@ class LayoutScreen(Screen):
 
     def go_to_materials(self, instance):
         """Быстрый переход к расчету материалов для текущей комнаты."""
+        self._persist_room_layout_state()
         if hasattr(self, 'ceiling_layout'):
             self._schedule_layout_update(immediate=True)
         self.manager.current = 'materials_result'
 
+    def create_light_button_panel(self):
+        panel = BoxLayout(
+            orientation='vertical',
+            size_hint=(None, None),
+            size=(dp(60), dp(54)),
+            pos_hint={'right': 1, 'top': 0.88},
+            spacing=dp(5),
+            padding=dp(5),
+        )
+        self.btn_light = RoundedButton(text='Свет', font_size=dp(14), size_hint=(1, 1))
+        self.btn_light.corner_radius = dp(12)
+        apply_btn_style(self.btn_light, role="secondary")
+        wrap_button_text(self.btn_light, horizontal_padding_dp=4)
+        self.btn_light.bind(on_press=self.toggle_lights_mode)
+        panel.add_widget(self.btn_light)
+        return panel
+
+    def toggle_lights_mode(self, instance):
+        if self.lights_mode:
+            self.lights_mode = False
+            self.layout_widget.light_placement_mode = False
+            apply_btn_style(self.btn_light, role="secondary")
+            prev = getattr(self, '_prev_control_mode', 'grid')
+            self.control_mode = prev
+            self.layout_widget.dragging_enabled = prev == 'grid'
+            if prev == 'pan_zoom':
+                self.mode_button.text = 'Панорама'
+            else:
+                self.mode_button.text = 'Сетка'
+        else:
+            self._prev_control_mode = self.control_mode
+            self.lights_mode = True
+            self.control_mode = 'lights'
+            self.layout_widget.light_placement_mode = True
+            self.layout_widget.dragging_enabled = False
+            apply_btn_style(self.btn_light, role="primary")
+            self.mode_button.text = 'Сетка'
+
     def toggle_control_mode(self, instance):
         """Переключает режим управления"""
+        if self.lights_mode:
+            self.toggle_lights_mode(self.btn_light)
         if self.control_mode == 'grid':
             self.control_mode = 'pan_zoom'
             self.mode_button.text = 'Панорама'
@@ -503,32 +559,37 @@ class LayoutScreen(Screen):
         if self.ceiling_layout:
             stats = self.ceiling_layout
             # Обновляем текст: вместо отходов показываем площадь
-            self.stats_label.text = f'Целых: {stats.full_tiles} | Резаных: {stats.cut_tiles} | Площадь: {stats.room_area_sqm:.2f} м²'
+            lights = len(getattr(self.layout_widget, 'light_fixtures', set()))
+            full, cut = effective_tile_counts_after_lights(
+                stats.full_tiles, stats.cut_tiles, lights
+            )
+            self.stats_label.text = (
+                f'Целых: {full} | Резаных: {cut} | '
+                f'Свет: {lights} | Площадь: {stats.room_area_sqm:.2f} м²'
+            )
+
+    def _persist_room_layout_state(self):
+        if not (hasattr(self, 'ceiling_layout') and self.manager.current_room):
+            return
+        current_room = self.manager.current_room
+        old_offset_x = getattr(current_room, 'grid_offset_x', 0)
+        old_offset_y = getattr(current_room, 'grid_offset_y', 0)
+        new_offset_x = self.ceiling_layout.grid_offset_x
+        new_offset_y = self.ceiling_layout.grid_offset_y
+        old_lights = getattr(current_room, 'light_fixtures', []) or []
+        new_lights = self.layout_widget.light_fixtures_list()
+        if (
+            old_offset_x != new_offset_x
+            or old_offset_y != new_offset_y
+            or old_lights != new_lights
+        ):
+            current_room.grid_offset_x = new_offset_x
+            current_room.grid_offset_y = new_offset_y
+            current_room.light_fixtures = new_lights
+            save_project(self.manager.current_project)
 
     def go_back(self, instance):
         """Возврат в редактор"""
-        # Перед выходом применяем отложенный пересчет, если есть
         self._schedule_layout_update(immediate=True)
-        # ← КРИТИЧНО: Сохраняем только если смещение изменилось
-        if hasattr(self, 'ceiling_layout') and self.manager.current_room:
-            current_room = self.manager.current_room
-
-            # Проверяем, изменилось ли смещение
-            old_offset_x = getattr(current_room, 'grid_offset_x', 0)
-            old_offset_y = getattr(current_room, 'grid_offset_y', 0)
-            new_offset_x = self.ceiling_layout.grid_offset_x
-            new_offset_y = self.ceiling_layout.grid_offset_y
-
-            # Сохраняем ТОЛЬКО если значения изменились
-            if old_offset_x != new_offset_x or old_offset_y != new_offset_y:
-                current_room.grid_offset_x = new_offset_x
-                current_room.grid_offset_y = new_offset_y
-                from database import save_project
-                save_project(self.manager.current_project)
-                print(
-                    f"Смещение сетки сохранено: {new_offset_x}×{new_offset_y} см")
-            else:
-                print("Смещение сетки не изменилось, сохранение пропущено")
-
-        # Возвращаемся к списку комнат
+        self._persist_room_layout_state()
         self.manager.current = 'rooms'

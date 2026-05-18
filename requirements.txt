@@ -16,3 +16,4 @@ pypiwin32==223
 pywin32==311
 requests==2.32.4
 urllib3==2.2.3
+pypdf>=4.0.0

@@ -83,7 +83,7 @@ class MaterialsProjectResultScreen(Screen):
         btn_cost.corner_radius = dp(12)
         apply_btn_style(btn_cost, role="secondary")
         wrap_button_text(btn_cost)
-        # пока без функционала
+        btn_cost.bind(on_press=lambda *_: setattr(self.manager, "current", "project_cost"))
 
         toolbar.add_widget(btn_back)
         toolbar.add_widget(self.title)
@@ -278,6 +278,8 @@ class MaterialsProjectResultScreen(Screen):
             if calc_type in ("grilyato_gl", "grilyato_classic"):
                 cassette_count = grilyato_cassette_count(room.walls, cassette_count)
 
+            light_count = len(getattr(room, "light_fixtures", []) or [])
+
             result = calculate_materials(
                 ceiling_type=calc_type,
                 walls=room.walls,
@@ -285,6 +287,7 @@ class MaterialsProjectResultScreen(Screen):
                 rows_3600=None,
                 rows_2400=None,
                 cell_size=cell,
+                light_count=light_count,
             )
 
             total_area += room_area_m2(room.walls)
@@ -302,6 +305,8 @@ class MaterialsProjectResultScreen(Screen):
                 # Плиты/кассеты логичнее разделять по типу потолка (армстронг ≠ грильято).
                 elif name == "Плиты/кассеты":
                     key = f"{name} ({ceiling})"
+                elif name == "Светильники":
+                    key = "Светильники"
                 totals[key] = int(totals.get(key, 0)) + int(value)
 
         lines = [

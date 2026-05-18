@@ -13,7 +13,7 @@ package.domain = org.test
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas,mp4
+source.include_exts = py,png,jpg,kv,atlas,mp4,json,xml
 
 # (list) List of inclusions using pattern matching
 #source.include_patterns = assets/*,images/*.png
@@ -37,7 +37,7 @@ version = 2.1.4
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow,ffpyplayer,ffmpeg
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow,ffpyplayer,ffmpeg,pypdf
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
@@ -95,7 +95,10 @@ fullscreen = 1
 
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
-#android.permissions = android.permission.INTERNET, (name=android.permission.WRITE_EXTERNAL_STORAGE;maxSdkVersion=18)
+android.permissions = INTERNET
+android.gradle_dependencies = androidx.core:core:1.10.1
+android.add_resources = res
+android.extra_manifest_application_arguments = %(source.dir)s/android/extra_manifest_application.xml
 
 # (list) features (adds uses-feature -tags to manifest)
 #android.features = android.hardware.usb.host

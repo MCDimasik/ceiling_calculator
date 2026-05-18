@@ -10,9 +10,13 @@ from kivy.uix.relativelayout import RelativeLayout
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.app import App
-from database import load_all_projects
-from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text
+from database import load_all_projects, delete_project
+from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, configure_modal_footer_buttons
 from widgets.ui_components import RoundedButton, RoundedLabel
+from widgets.ui_modal import RoundedModal
+from widgets.tile_actions import LongPressTile
+from project_transfer import share_project_by_id
+from kivy.uix.label import Label
 import theme
 
 
@@ -119,23 +123,41 @@ class MaterialsProjectsScreen(Screen):
     def _create_project_tile(self, project):
         container_width = self.container.width if self.container.width > 0 else self.width
         tile_w = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        tile = RelativeLayout(size_hint=(None, None), size=(tile_w, tile_w))
-        btn = RoundedButton(
-            text=project.name,
-            size_hint=(1, 1),
-            background_normal='',
-            color=COLORS["text"],
-            halign='center',
-            valign='middle',
-            text_size=(tile_w - dp(20), tile_w - dp(20)),
-            shorten=False,
-            max_lines=2,
+        pid = project.id
+        return LongPressTile(
+            tile_w,
+            project.name,
+            on_open=lambda p=project: self.open_project(p),
+            on_share=lambda: share_project_by_id(pid),
+            on_delete=lambda: self._confirm_delete_project(pid),
         )
-        btn.corner_radius = dp(18)
-        apply_btn_style(btn, role="surface")
-        btn.bind(on_press=lambda _, p=project: self.open_project(p))
-        tile.add_widget(btn)
-        return tile
+
+    def _confirm_delete_project(self, project_id):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+        content.add_widget(Label(text="Удалить проект?", font_size=dp(16), color=COLORS["text"]))
+        btn_layout = BoxLayout(spacing=dp(10))
+        modal = None
+
+        def do_delete(*_):
+            if delete_project(project_id):
+                self.load_projects()
+            if modal:
+                modal.dismiss()
+
+        btn_del = RoundedButton(text="Удалить")
+        btn_del.corner_radius = dp(12)
+        apply_btn_style(btn_del, role="danger")
+        btn_cancel = RoundedButton(text="Отмена")
+        btn_cancel.corner_radius = dp(12)
+        apply_btn_style(btn_cancel, role="secondary")
+        btn_del.bind(on_press=do_delete)
+        btn_cancel.bind(on_press=lambda *_: modal.dismiss())
+        btn_layout.add_widget(btn_cancel)
+        btn_layout.add_widget(btn_del)
+        configure_modal_footer_buttons(btn_layout, btn_cancel, btn_del)
+        content.add_widget(btn_layout)
+        modal = RoundedModal(content=content, card_size_hint=(0.84, None), card_height_dp=210)
+        modal.open()
 
     def open_project(self, project):
         self.manager.current_project = project

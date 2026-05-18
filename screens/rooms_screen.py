@@ -22,6 +22,8 @@ from kivy.uix.relativelayout import RelativeLayout
 from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, style_text_input, configure_modal_footer_buttons, make_input_row
 from widgets.ui_components import RoundedButton, RoundedLabel
 from widgets.ui_modal import RoundedModal
+from widgets.tile_actions import LongPressTile
+from project_transfer import share_room
 import theme
 
 
@@ -245,71 +247,31 @@ class RoomsScreen(Screen):
                 self.rooms_container.height = self.rooms_container.minimum_height
 
     def create_room_tile(self, room):
-        """Создает плитку для комнаты с кнопкой удаления"""
+        """Плитка комнаты: тап — открыть, долгое нажатие — поделиться / удалить."""
         container_width = self.rooms_container.width if self.rooms_container.width > 0 else self.width
         tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        
-        tile_layout = RelativeLayout(
-            size_hint=(None, None),
-            size=(tile_width, tile_width)
-        )
-        
-        # ← КРИТИЧНО: безопасный расчет площади комнаты
+
         from models import CeilingLayout
         room_area = 0.0
         if room.walls and len(room.walls) >= 3:
             try:
                 temp_layout = CeilingLayout(room)
-                # ← КРИТИЧНО: Вызываем calculate_layout() для расчета площади!
                 temp_layout.calculate_layout()
-                room_area = temp_layout.room_area_sqm if hasattr(temp_layout, 'room_area_sqm') else 0.0
+                room_area = temp_layout.room_area_sqm if hasattr(temp_layout, "room_area_sqm") else 0.0
             except Exception as e:
                 print(f"Ошибка расчета площади: {e}")
-                room_area = 0.0
-        
-        # ← КРИТИЧНО: правильное форматирование текста
-        if room_area > 0:
-            button_text = f"{room.name}\n{room_area:.1f} м²"
-        else:
-            button_text = room.name
-        
-        tile_button = RoundedButton(
-            background_normal='',
-            text=button_text,
-            font_size=dp(16),
-            color=COLORS["text"],
-            halign='center',
-            valign='middle',
-            text_size=(tile_width - dp(20), tile_width - dp(20)),
-            shorten=False,
-            max_lines=2
+
+        button_text = f"{room.name}\n{room_area:.1f} м²" if room_area > 0 else room.name
+        project_id = self.manager.current_project.id if self.manager.current_project else None
+        rid = room.id
+
+        return LongPressTile(
+            tile_width,
+            button_text,
+            on_open=lambda r=room: self.open_room_editor(r),
+            on_share=lambda r=room: share_room(project_id, r),
+            on_delete=lambda: self.confirm_delete_room(rid),
         )
-        tile_button.corner_radius = dp(18)
-        apply_btn_style(tile_button, role="surface")
-        tile_button.bind(on_press=lambda instance, r=room: self.open_room_editor(r))
-        
-        # Кнопка удаления
-        delete_container = BoxLayout(
-            size_hint=(None, None),
-            size=(dp(25), dp(25)),
-            pos_hint={'right': 1, 'top': 1}
-        )
-        delete_button = RoundedButton(
-            text='X',
-            font_size=dp(12),
-            size_hint=(1, 1),
-            color=(1, 1, 1, 1),
-            halign='center',
-            valign='middle'
-        )
-        delete_button.corner_radius = dp(10)
-        apply_btn_style(delete_button, role="danger")
-        delete_button.bind(on_press=lambda instance, r_id=room.id: self.confirm_delete_room(r_id))
-        delete_container.add_widget(delete_button)
-        
-        tile_layout.add_widget(tile_button)
-        tile_layout.add_widget(delete_container)
-        return tile_layout
 
     def open_room_editor(self, room):
         """Открывает редактор комнаты"""

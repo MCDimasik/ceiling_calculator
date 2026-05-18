@@ -16,10 +16,13 @@ from kivy.core.window import Window
 from kivy.utils import platform
 from kivy.app import App
 from database import init_db, load_all_projects, save_project, delete_project, load_project
+from supplier_db import init_supplier_tables
 from kivy.uix.relativelayout import RelativeLayout
 from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, style_text_input, configure_modal_footer_buttons, make_input_row
 from widgets.ui_components import RoundedButton, RoundedLabel
 from widgets.ui_modal import RoundedModal
+from widgets.tile_actions import LongPressTile
+from project_transfer import share_project_by_id
 import theme
 
 
@@ -30,6 +33,7 @@ class ProjectsScreen(Screen):
         super().__init__(**kwargs)
         # Инициализируем БД при запуске приложения
         init_db()
+        init_supplier_tables()
 
         root = FloatLayout()
         self._root = root
@@ -229,79 +233,34 @@ class ProjectsScreen(Screen):
             self.projects_container.height = self.projects_container.minimum_height
 
     def create_project_tile(self, project):
-        """Создает плитку для проекта с кнопкой удаления"""
+        """Плитка проекта: тап — открыть, долгое нажатие — поделиться / удалить."""
         container_width = self.projects_container.width if self.projects_container.width > 0 else self.width
-        tile_width = (container_width - dp(30)) / \
-            2 if container_width > 0 else dp(150)
+        tile_width = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
 
-        tile_layout = RelativeLayout(
-            size_hint=(None, None),
-            size=(tile_width, tile_width)
-        )
-
-        # ← КРИТИЧНО: Загружаем проект с комнатами для расчета площади
         from models import CeilingLayout
         total_area = 0.0
-
         full_project = load_project(project.id) if project.id else None
         if full_project:
             for room in full_project.rooms:
                 try:
                     if room.walls and len(room.walls) >= 3:
                         temp_layout = CeilingLayout(room)
-                        temp_layout.calculate_layout()  # ← Вызываем для расчета площади!
+                        temp_layout.calculate_layout()
                         total_area += temp_layout.room_area_sqm if hasattr(
-                            temp_layout, 'room_area_sqm') else 0.0
+                            temp_layout, "room_area_sqm") else 0.0
                 except Exception as e:
                     print(f"Ошибка расчета площади: {e}")
-                    continue
 
-        # Форматирование текста
-        if total_area > 0:
-            button_text = f"{project.name}\n{total_area:.1f} м²"
-        else:
-            button_text = project.name
+        button_text = f"{project.name}\n{total_area:.1f} м²" if total_area > 0 else project.name
+        pid = project.id
 
-        tile_button = RoundedButton(
-            background_normal='',
-            text=button_text,
-            font_size=dp(16),
-            color=COLORS["text"],
-            halign='center',
-            valign='middle',
-            text_size=(tile_width - dp(20), tile_width - dp(20)),
-            shorten=False,
-            max_lines=2
+        return LongPressTile(
+            tile_width,
+            button_text,
+            on_open=lambda p=project: self.open_project(p),
+            on_share=lambda: share_project_by_id(pid),
+            on_delete=lambda: self.confirm_delete_project(pid),
         )
-        tile_button.corner_radius = dp(18)
-        apply_btn_style(tile_button, role="surface")
-        tile_button.bind(on_press=lambda instance,
-                         p=project: self.open_project(p))
-
-        # Кнопка удаления
-        delete_container = BoxLayout(
-            size_hint=(None, None),
-            size=(dp(25), dp(25)),
-            pos_hint={'right': 1, 'top': 1}
-        )
-        delete_button = RoundedButton(
-            text='X',
-            font_size=dp(12),
-            size_hint=(1, 1),
-            color=(1, 1, 1, 1),
-            halign='center',
-            valign='middle'
-        )
-        delete_button.corner_radius = dp(10)
-        apply_btn_style(delete_button, role="danger")
-        delete_button.bind(on_press=lambda instance,
-                           p_id=project.id: self.confirm_delete_project(p_id))
-        delete_container.add_widget(delete_button)
-
-        tile_layout.add_widget(tile_button)
-        tile_layout.add_widget(delete_container)
-
-        return tile_layout
 
     def confirm_delete_project(self, project_id):
         """Показывает диалог подтверждения удаления проекта."""

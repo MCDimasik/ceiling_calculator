@@ -34,6 +34,10 @@ from screens.materials_rooms_screen import MaterialsRoomsScreen
 from screens.materials_result_screen import MaterialsResultScreen
 from screens.materials_project_result_screen import MaterialsProjectResultScreen
 from screens.settings_screen import SettingsScreen
+from screens.suppliers_screen import SuppliersScreen
+from screens.supplier_edit_screen import SupplierEditScreen
+from screens.receipt_import_screen import ReceiptImportScreen
+from screens.project_cost_screen import ProjectCostScreen
 
 
 class CeilingCalculatorApp(App):
@@ -89,8 +93,21 @@ class CeilingCalculatorApp(App):
         sm.add_widget(MaterialsResultScreen(name='materials_result'))
         sm.add_widget(MaterialsProjectResultScreen(name='materials_project_result'))
         sm.add_widget(SettingsScreen(name='settings'))
+        sm.add_widget(SuppliersScreen(name='suppliers'))
+        sm.add_widget(SupplierEditScreen(name='supplier_edit'))
+        sm.add_widget(ReceiptImportScreen(name='receipt_import'))
+        sm.add_widget(ProjectCostScreen(name='project_cost'))
+        sm.supplier_edit_id = None
 
         return sm
+
+    def on_start(self):
+        try:
+            from platform_files import register_android_callbacks
+
+            register_android_callbacks()
+        except Exception:
+            pass
 
     def on_resume(self):
         return

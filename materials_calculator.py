@@ -175,8 +175,8 @@ def calc_grilyato_gl(walls, cassette_count, rows_3600, rows_2400, cell_size):
 
     # Папа/Мама — как классический Грильято, но по формуле от площади и коэффициента
     profile = math.ceil((area_m2 / 0.34) * k)
-    # Заглушки (только GL): (Профиль Мама / 11) * 4, округление вверх
-    stoppers = math.ceil((profile / 11.0) * 4.0)
+    # Заглушки (только GL): (Профиль / k) * 4, k = 11 (50x50), 7 (75x75), 5 (100x100)
+    stoppers = math.ceil((profile / float(k)) * 4.0)
 
     return {
         "Профиль Папа": profile,
@@ -222,7 +222,43 @@ def calc_grilyato_classic(walls, cassette_count, rows_3600, rows_2400, cell_size
     }
 
 
-def calculate_materials(ceiling_type, walls, cassette_count, rows_3600=None, rows_2400=None, cell_size="100x100"):
+def effective_tile_counts_after_lights(full_tiles, cut_tiles, light_count):
+    """
+    Светильник занимает ячейку вместо плиты: сначала вычитаем из целых, затем из резаных.
+    """
+    lights = max(0, int(light_count or 0))
+    full = max(0, int(full_tiles or 0))
+    cut = max(0, int(cut_tiles or 0))
+    rem = lights
+    from_full = min(rem, full)
+    full -= from_full
+    rem -= from_full
+    cut = max(0, cut - rem)
+    return full, cut
+
+
+def apply_light_fixture_deductions(result, ceiling_type, cell_size, light_count):
+    """Уменьшает плиты (Армстронг) или профили (Грильято) на одну ячейку на светильник."""
+    if light_count <= 0:
+        return result
+    result = dict(result)
+    if ceiling_type == "armstrong":
+        key = "Плиты/кассеты"
+        if key in result:
+            result[key] = max(0, int(result[key]) - light_count)
+    elif ceiling_type in ("grilyato_classic", "grilyato_gl"):
+        k = _grilyato_profile_factor(cell_size)
+        deduct = light_count * k
+        for key in ("Профиль Папа", "Профиль Мама"):
+            if key in result:
+                result[key] = max(0, int(result[key]) - deduct)
+        if ceiling_type == "grilyato_gl" and "Заглушки" in result:
+            profile = int(result.get("Профиль Мама", 0))
+            result["Заглушки"] = math.ceil((profile / float(k)) * 4.0)
+    return result
+
+
+def calculate_materials(ceiling_type, walls, cassette_count, rows_3600=None, rows_2400=None, cell_size="100x100", light_count=0):
     if rows_3600 is None or rows_2400 is None:
         if ceiling_type == "grilyato_classic":
             auto_3600, auto_2400 = auto_rows_for_grilyato_classic(walls)
@@ -234,9 +270,17 @@ def calculate_materials(ceiling_type, walls, cassette_count, rows_3600=None, row
             rows_2400 = auto_2400
 
     if ceiling_type == "armstrong":
-        return calc_armstrong(walls, cassette_count, rows_3600, rows_2400)
-    if ceiling_type == "grilyato_gl":
-        return calc_grilyato_gl(walls, cassette_count, rows_3600, rows_2400, cell_size)
-    if ceiling_type == "grilyato_classic":
-        return calc_grilyato_classic(walls, cassette_count, rows_3600, rows_2400, cell_size)
-    return {}
+        result = calc_armstrong(walls, cassette_count, rows_3600, rows_2400)
+    elif ceiling_type == "grilyato_gl":
+        result = calc_grilyato_gl(walls, cassette_count, rows_3600, rows_2400, cell_size)
+    elif ceiling_type == "grilyato_classic":
+        result = calc_grilyato_classic(walls, cassette_count, rows_3600, rows_2400, cell_size)
+    else:
+        result = {}
+
+    result = apply_light_fixture_deductions(result, ceiling_type, cell_size, light_count)
+    if light_count > 0:
+        ordered = {"Светильники": light_count}
+        ordered.update(result)
+        return ordered
+    return result

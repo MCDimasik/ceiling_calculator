@@ -10,9 +10,12 @@ from kivy.uix.relativelayout import RelativeLayout
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.app import App
-from database import load_project
-from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text
+from database import load_project, save_project
+from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, configure_modal_footer_buttons
 from widgets.ui_components import RoundedButton, RoundedLabel
+from widgets.ui_modal import RoundedModal
+from widgets.tile_actions import LongPressTile
+from project_transfer import share_room
 import theme
 
 
@@ -129,23 +132,49 @@ class MaterialsRoomsScreen(Screen):
     def _create_room_tile(self, room):
         container_width = self.container.width if self.container.width > 0 else self.width
         tile_w = (container_width - dp(30)) / 2 if container_width > 0 else dp(150)
-        tile = RelativeLayout(size_hint=(None, None), size=(tile_w, tile_w))
-        btn = RoundedButton(
-            text=room.name,
-            size_hint=(1, 1),
-            background_normal='',
-            color=COLORS["text"],
-            halign='center',
-            valign='middle',
-            text_size=(tile_w - dp(20), tile_w - dp(20)),
-            shorten=False,
-            max_lines=2,
+        project = getattr(self.manager, "current_project", None)
+        project_id = project.id if project else None
+        rid = room.id
+        return LongPressTile(
+            tile_w,
+            room.name,
+            on_open=lambda r=room: self.open_room(r),
+            on_share=lambda r=room: share_room(project_id, r),
+            on_delete=lambda: self._confirm_delete_room(rid),
         )
-        btn.corner_radius = dp(18)
-        apply_btn_style(btn, role="surface")
-        btn.bind(on_press=lambda _, r=room: self.open_room(r))
-        tile.add_widget(btn)
-        return tile
+
+    def _confirm_delete_room(self, room_id):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+        content.add_widget(Label(text="Удалить комнату?", font_size=dp(16), color=COLORS["text"]))
+        btn_layout = BoxLayout(spacing=dp(10))
+        modal = None
+
+        def do_delete(*_):
+            project = self.manager.current_project
+            if project:
+                project.rooms = [r for r in project.rooms if r.id != room_id]
+                save_project(project)
+                updated = load_project(project.id)
+                if updated:
+                    self.manager.current_project = updated
+                self.on_pre_enter()
+            if modal:
+                modal.dismiss()
+
+        btn_del = RoundedButton(text="Удалить")
+        btn_del.corner_radius = dp(12)
+        apply_btn_style(btn_del, role="danger")
+        btn_cancel = RoundedButton(text="Отмена")
+        btn_cancel.corner_radius = dp(12)
+        apply_btn_style(btn_cancel, role="secondary")
+        btn_del.bind(on_press=do_delete)
+        btn_cancel.bind(on_press=lambda *_: modal.dismiss())
+        btn_layout.add_widget(btn_cancel)
+        btn_layout.add_widget(btn_del)
+        configure_modal_footer_buttons(btn_layout, btn_cancel, btn_del)
+        content.add_widget(btn_layout)
+        modal = RoundedModal(content=content, card_size_hint=(0.84, None), card_height_dp=210)
+        modal.open()
 
     def open_room(self, room):
         self.manager.current_room = room

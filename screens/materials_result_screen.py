@@ -470,6 +470,8 @@ class MaterialsResultScreen(Screen):
         if calc_type in ("grilyato_gl", "grilyato_classic"):
             cassette_count = grilyato_cassette_count(room.walls, cassette_count)
 
+        light_count = len(getattr(room, "light_fixtures", []) or [])
+
         result = calculate_materials(
             ceiling_type=type_map.get(self.ceiling_tabs.selected, "armstrong"),
             walls=room.walls,
@@ -477,6 +479,7 @@ class MaterialsResultScreen(Screen):
             rows_3600=None,
             rows_2400=None,
             cell_size=self.cell_tabs.selected,
+            light_count=light_count,
         )
 
         calc_type = type_map.get(self.ceiling_tabs.selected, "armstrong")
@@ -534,7 +537,18 @@ class MaterialsResultScreen(Screen):
                 "100x100 -> Папа/Мама = ceil((S/0.34) * 5)",
             ])
             if calc_type == "grilyato_gl":
-                formula_lines.append("Заглушки = ceil((Профиль/11) * 4)")
+                formula_lines.extend([
+                    "Заглушки (GL):",
+                    "50x50  -> ceil((Профиль/11) * 4)",
+                    "75x75  -> ceil((Профиль/7) * 4)",
+                    "100x100 -> ceil((Профиль/5) * 4)",
+                ])
+        formula_lines.extend([
+            "",
+            "Светильники (на раскладке):",
+            "Армстронг: −1 плита на светильник",
+            "Грильято: −k профилей Папа/Мама (50→11, 75→7, 100→5)",
+        ])
 
         self.formulas_label.text = "\n".join(formula_lines)
         if self.formulas_visible:

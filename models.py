@@ -45,6 +45,8 @@ class Room:
         self.last_position = None  # Последняя позиция курсора в редакторе
         self.grid_offset_x = 0  # Сохранённое смещение сетки (критично!)
         self.grid_offset_y = 0  # Сохранённое смещение сетки (критично!)
+        # Ключи ячеек сетки со светильниками: [[ix, iy], ...] (индексы относительно grid_offset)
+        self.light_fixtures = []
 
     def to_dict(self):
         """Конвертирует комнату в словарь"""
@@ -55,7 +57,8 @@ class Room:
             'walls': self.walls,
             'last_position': self.last_position,
             'grid_offset_x': self.grid_offset_x,  # Новое поле
-            'grid_offset_y': self.grid_offset_y   # Новое поле
+            'grid_offset_y': self.grid_offset_y,   # Новое поле
+            'light_fixtures': list(self.light_fixtures),
         }
 
     @classmethod
@@ -68,6 +71,7 @@ class Room:
         room.last_position = data.get('last_position')
         room.grid_offset_x = data.get('grid_offset_x', 0)  # Новое поле
         room.grid_offset_y = data.get('grid_offset_y', 0)  # Новое поле
+        room.light_fixtures = data.get('light_fixtures', []) or []
         return room
 
 

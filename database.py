@@ -107,6 +107,7 @@ def init_db():
         "ALTER TABLE rooms ADD COLUMN materials_ceiling TEXT",
         "ALTER TABLE rooms ADD COLUMN materials_susp TEXT",
         "ALTER TABLE rooms ADD COLUMN materials_cell TEXT",
+        "ALTER TABLE rooms ADD COLUMN light_fixtures_json TEXT",
     ):
         try:
             cursor.execute(col_ddl)
@@ -163,12 +164,13 @@ def save_project(project):
             m_ceiling = getattr(room, "materials_ceiling", None)
             m_susp = getattr(room, "materials_susp", None)
             m_cell = getattr(room, "materials_cell", None)
+            lights_json = json.dumps(getattr(room, "light_fixtures", []) or [])
             cursor.execute("""
             INSERT INTO rooms (project_id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y,
-                               materials_override, materials_ceiling, materials_susp, materials_cell)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               materials_override, materials_ceiling, materials_susp, materials_cell, light_fixtures_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (project.id, room.name, room.created_at.isoformat(), walls_json_str, last_pos_json_str, grid_offset_x, grid_offset_y,
-                  m_override, m_ceiling, m_susp, m_cell))
+                  m_override, m_ceiling, m_susp, m_cell, lights_json))
 
         conn.commit()
         print(f"Проект '{project.name}' успешно сохранен в базу данных.")
@@ -199,7 +201,7 @@ def load_project(project_id):
 
         # ← КРИТИЧНО: Загружаем комнаты с всеми полями
         cursor.execute(
-            "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y, materials_override, materials_ceiling, materials_susp, materials_cell FROM rooms WHERE project_id = ?",
+            "SELECT id, name, created_at, walls_json, last_position_json, grid_offset_x, grid_offset_y, materials_override, materials_ceiling, materials_susp, materials_cell, light_fixtures_json FROM rooms WHERE project_id = ?",
             (project_id,),
         )
         for room_row in cursor.fetchall():
@@ -215,6 +217,13 @@ def load_project(project_id):
             room.materials_ceiling = room_row[8] if len(room_row) > 8 else None
             room.materials_susp = room_row[9] if len(room_row) > 9 else None
             room.materials_cell = room_row[10] if len(room_row) > 10 else None
+            if len(room_row) > 11 and room_row[11]:
+                try:
+                    room.light_fixtures = json.loads(room_row[11]) or []
+                except (json.JSONDecodeError, TypeError):
+                    room.light_fixtures = []
+            else:
+                room.light_fixtures = []
             project.rooms.append(room)
 
         print(

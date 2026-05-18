@@ -134,6 +134,68 @@ def style_text_input(text_input):
     text_input.padding = (dp(10), dp(10))
 
 
+def format_number_ru(value, decimals=0):
+    """Разделитель тысяч — пробел; дробная часть — запятая (45 865,50)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    negative = n < 0
+    n = abs(n)
+    if decimals > 0:
+        scale = 10**decimals
+        int_part = int(n)
+        frac = int(round((n - int_part) * scale + 1e-9))
+        if frac >= scale:
+            int_part += 1
+            frac = 0
+        int_s = f"{int_part:,}".replace(",", " ")
+        body = f"{int_s},{frac:0{decimals}d}"
+    else:
+        body = f"{int(round(n)):,}".replace(",", " ")
+    return f"-{body}" if negative else body
+
+
+def format_money_ru(value):
+    return f"{format_number_ru(value, 2)} ₽"
+
+
+def bind_label_autosize(label, min_height_dp=22, pad_dp=8):
+    """Подгоняет высоту Label под перенос строк (без наезда на соседей)."""
+    label.size_hint_y = None
+
+    def _refresh(*_):
+        if label.width < dp(8):
+            return
+        label.text_size = (label.width - dp(4), None)
+        label.texture_update()
+        th = label.texture_size[1] if label.texture_size else 0
+        label.height = max(dp(min_height_dp), th + dp(pad_dp))
+
+    label.bind(size=_refresh, text=_refresh)
+    from kivy.clock import Clock
+
+    Clock.schedule_once(lambda *_: _refresh(), 0)
+    return _refresh
+
+
+def make_price_input(hint_text="", font_size_dp=14, height_dp=42):
+    """Поле цены с достаточной высотой, чтобы цифры не обрезались."""
+    from kivy.uix.textinput import TextInput
+
+    field = TextInput(
+        multiline=False,
+        hint_text=hint_text,
+        font_size=dp(font_size_dp),
+        input_filter="float",
+        size_hint_y=None,
+        height=dp(height_dp),
+    )
+    style_text_input(field)
+    field.padding = (dp(10), dp(11))
+    return field
+
+
 def make_input_row(text_input, height_dp=None, radius_dp=14, border_rgba=None):
     """
     Обертка для TextInput, чтобы поле ввода было визуально заметно:

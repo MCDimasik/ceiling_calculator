@@ -1,6 +1,7 @@
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.video import Video
 from kivy.uix.image import Image
@@ -57,6 +58,9 @@ class MainScreen(Screen):
         root.add_widget(self.bg_video)
         root.bind(pos=lambda *_: self._layout_video_cover(), size=lambda *_: self._layout_video_cover())
 
+        self._bg_video_path = None
+        self._bg_video_ready = False
+
         # Основной вертикальный контейнер (поверх видео)
         main_layout = BoxLayout(
             orientation="vertical",
@@ -71,7 +75,7 @@ class MainScreen(Screen):
             orientation='vertical',
             spacing=dp(12),
             size_hint=(1, None),
-            height=dp(192),
+            height=dp(54) * 5 + dp(12) * 4,
         )
 
         # Кнопка 1: Расчет раскладки потолка
@@ -97,6 +101,26 @@ class MainScreen(Screen):
         apply_btn_style(self.btn_calc2, role="surface")
         self.btn_calc2.bind(on_press=self.go_to_materials)
 
+        self.btn_import = RoundedButton(
+            text='Импорт проекта',
+            font_size=dp(16),
+            size_hint=(1, None),
+            height=dp(54),
+        )
+        self.btn_import.corner_radius = dp(18)
+        apply_btn_style(self.btn_import, role="surface")
+        self.btn_import.bind(on_press=self.show_import_stub)
+
+        self.btn_suppliers = RoundedButton(
+            text='Поставщики',
+            font_size=dp(16),
+            size_hint=(1, None),
+            height=dp(54),
+        )
+        self.btn_suppliers.corner_radius = dp(18)
+        apply_btn_style(self.btn_suppliers, role="surface")
+        self.btn_suppliers.bind(on_press=lambda *_: setattr(self.manager, "current", "suppliers"))
+
         self.btn_settings = RoundedButton(
             text='Настройки',
             font_size=dp(16),
@@ -110,6 +134,8 @@ class MainScreen(Screen):
         # Собираем интерфейс
         buttons_layout.add_widget(self.btn_calc1)
         buttons_layout.add_widget(self.btn_calc2)
+        buttons_layout.add_widget(self.btn_import)
+        buttons_layout.add_widget(self.btn_suppliers)
         buttons_layout.add_widget(self.btn_settings)
 
         # Без логотипа: больше воздуха под кнопки
@@ -121,7 +147,13 @@ class MainScreen(Screen):
 
     def on_pre_enter(self):
         # На всякий случай синхронизируем стили кнопок с текущей темой
-        for b in (getattr(self, "btn_calc1", None), getattr(self, "btn_calc2", None), getattr(self, "btn_settings", None)):
+        for b in (
+            getattr(self, "btn_calc1", None),
+            getattr(self, "btn_calc2", None),
+            getattr(self, "btn_import", None),
+            getattr(self, "btn_suppliers", None),
+            getattr(self, "btn_settings", None),
+        ):
             if b is not None:
                 role = getattr(b, "_ui_btn_role", "surface")
                 apply_btn_style(b, role=role)
@@ -131,17 +163,37 @@ class MainScreen(Screen):
         Clock.schedule_once(lambda *_: self._apply_bg_video(), 0)
 
     def on_leave(self, *args):
-        # Не держим декодер активным между экранами
+        # Пауза + скрытие: не сбрасываем source/позицию — при возврате без рывка и без перезагрузки.
+        self._cancel_video_poll()
+        try:
+            self.bg_video.opacity = 0
+            if self.bg_video.state == "play":
+                self.bg_video.state = "pause"
+        except Exception:
+            pass
+
+    def _cancel_video_poll(self):
         try:
             if getattr(self, "_video_load_poll_ev", None) is not None:
                 self._video_load_poll_ev.cancel()
                 self._video_load_poll_ev = None
         except Exception:
             pass
+
+    def _video_has_texture(self):
+        tex = getattr(self.bg_video, "texture", None)
+        return tex is not None and tex.width > 0 and tex.height > 0
+
+    def _resume_bg_video(self):
+        """Продолжить уже загруженное видео без перезагрузки source."""
+        self._layout_video_cover()
         try:
-            self.bg_video.state = "stop"
+            if self.bg_video.state != "play":
+                self.bg_video.state = "play"
         except Exception:
             pass
+        self.bg_video.opacity = 1
+        self._bg_video_ready = True
 
     def _apply_bg_video(self):
         from kivy.app import App
@@ -162,8 +214,10 @@ class MainScreen(Screen):
 
         if not use_video:
             self.bg_video.opacity = 0
+            self._bg_video_ready = False
             try:
-                self.bg_video.state = "stop"
+                if self.bg_video.state == "play":
+                    self.bg_video.state = "pause"
             except Exception:
                 pass
             return
@@ -173,20 +227,24 @@ class MainScreen(Screen):
         if not path or not os.path.exists(path):
             Logger.warning("MainScreen: bg video not found: rel=%r resolved=%r", rel, path)
             self.bg_video.opacity = 0
+            self._bg_video_ready = False
             return
-        # Video.source ожидает путь к файлу, не file:// URI
-        self.bg_video.source = path
-        try:
-            self.bg_video.state = "stop"
-        except Exception:
-            pass
-        # Чуть позже запускаем play (иначе на части устройств первый старт игнорируется)
-        Clock.schedule_once(self._start_video_playback, 0.10)
-        # На слабых/перегруженных устройствах texture может появляться заметно позже 1с.
+
+        # Тот же ролик уже в памяти — только play, без stop/source (иначе мигание и с начала).
+        if path == self._bg_video_path and self._video_has_texture():
+            self._resume_bg_video()
+            return
+
+        # Смена темы / первый запуск — грузим заново.
+        self._bg_video_path = path
+        self._bg_video_ready = False
+        self._cancel_video_poll()
         self.bg_video.opacity = 0
+        if self.bg_video.source != path:
+            self.bg_video.source = path
         try:
-            if getattr(self, "_video_load_poll_ev", None) is not None:
-                self._video_load_poll_ev.cancel()
+            if self.bg_video.state != "play":
+                self.bg_video.state = "play"
         except Exception:
             pass
         self._video_load_poll_ev_tries = 0
@@ -214,25 +272,12 @@ class MainScreen(Screen):
                 continue
         return candidates[0] if candidates else rel
 
-    def _start_video_playback(self, *_):
-        try:
-            self.bg_video.state = "play"
-        except Exception:
-            pass
-
     def _poll_video_loaded(self, *_):
         # Если видео не загрузилось (нет texture), остаёмся на фолбэк-фоне
         self._video_load_poll_ev_tries = getattr(self, "_video_load_poll_ev_tries", 0) + 1
-        tex = getattr(self.bg_video, "texture", None)
-        if tex is not None:
-            self._layout_video_cover()
-            self.bg_video.opacity = 1
-            try:
-                if getattr(self, "_video_load_poll_ev", None) is not None:
-                    self._video_load_poll_ev.cancel()
-                    self._video_load_poll_ev = None
-            except Exception:
-                pass
+        if self._video_has_texture():
+            self._resume_bg_video()
+            self._cancel_video_poll()
             return False
         # ~6 секунд (0.25 * 24) ждём, дальше сдаёмся и оставляем фолбэк
         if self._video_load_poll_ev_tries >= 24:
@@ -301,3 +346,47 @@ class MainScreen(Screen):
 
     def go_to_settings(self, instance):
         self.manager.current = "settings"
+
+    def _show_stub_popup(self, title, message):
+        content = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        lbl = Label(
+            text=message,
+            font_size=dp(14),
+            halign="center",
+            valign="middle",
+            color=COLORS["text"],
+        )
+        lbl.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        content.add_widget(lbl)
+        btn_ok = RoundedButton(text="ОК", size_hint=(1, None), height=dp(44))
+        btn_ok.corner_radius = dp(12)
+        apply_btn_style(btn_ok, role="secondary")
+        popup = Popup(
+            title=title,
+            content=content,
+            size_hint=(0.85, None),
+            height=dp(180),
+            auto_dismiss=True,
+        )
+        btn_ok.bind(on_press=popup.dismiss)
+        content.add_widget(btn_ok)
+        popup.open()
+
+    def show_import_stub(self, instance):
+        from project_transfer import import_project
+
+        def on_success(project):
+            rooms_n = len(getattr(project, "rooms", []) or [])
+            self._show_stub_popup(
+                "Импорт проекта",
+                f"Проект «{project.name}» добавлен.\nКомнат: {rooms_n}.",
+            )
+
+        def on_error(message):
+            self._show_stub_popup(
+                "Импорт проекта",
+                message or "Не удалось прочитать файл проекта.",
+            )
+
+        import_project(on_success=on_success, on_error=on_error)
+
