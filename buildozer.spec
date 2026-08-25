@@ -37,7 +37,8 @@ version = 2.1.4
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow,ffpyplayer,ffmpeg,pypdf
+# kivymd не используется в коде — убран, чтобы упростить сборку APK
+requirements = python3,kivy==2.3.0,pillow,ffpyplayer,pypdf
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
@@ -97,6 +98,7 @@ fullscreen = 1
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
 android.permissions = INTERNET
 android.gradle_dependencies = androidx.core:core:1.10.1
+android.enable_androidx = True
 android.add_resources = res
 android.extra_manifest_application_arguments = %(source.dir)s/android/extra_manifest_application.xml
 
@@ -286,7 +288,7 @@ android.add_assets = assets/white_theme.mp4, assets/dark_theme.mp4
 
 # (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
 # In past, was `android.arch` as we weren't supporting builds for multiple archs at the same time.
-android.archs = arm64-v8a
+android.archs = arm64-v8a,armeabi-v7a
 
 # (int) overrides automatic versionCode computation (used in build.gradle)
 # this is not the same as app version and should only be edited if you know what you're doing

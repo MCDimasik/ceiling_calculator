@@ -1,7 +1,10 @@
 import os
+import sys
+import traceback
 
 from kivy.app import App
 from kivy.core.window import Window
+from kivy.logger import Logger
 from kivy.uix.screenmanager import ScreenManager
 from kivy.uix.screenmanager import SlideTransition
 from kivy.utils import platform
@@ -9,6 +12,23 @@ from kivy.utils import platform
 import theme
 from ui_style import COLORS
 from app_access import load_admin_unlocked
+
+
+def _install_excepthook():
+    def _hook(exc_type, exc, tb):
+        Logger.error("Uncaught: %s", "".join(traceback.format_exception(exc_type, exc, tb)))
+        try:
+            from app_bootstrap import _write_crash_log
+
+            _write_crash_log("uncaught", exc)
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
+_install_excepthook()
 
 # ANGLE нужен только для отладки на Windows. На Android может ломать рендер/видео.
 if platform == "win":
@@ -46,6 +66,11 @@ class CeilingCalculatorApp(App):
     use_video_bg = True
 
     def build(self):
+        try:
+            os.makedirs(self.user_data_dir, exist_ok=True)
+        except Exception as exc:
+            Logger.warning("Could not create user_data_dir: %s", exc)
+
         # На Android/Buildozer cwd может отличаться; добавляем явные пути ресурсов.
         try:
             from kivy.resources import resource_add_path
@@ -105,11 +130,18 @@ class CeilingCalculatorApp(App):
 
     def on_start(self):
         try:
+            from app_bootstrap import ensure_app_storage_ready
+
+            ensure_app_storage_ready()
+        except Exception as exc:
+            Logger.exception("App storage init on_start: %s", exc)
+
+        try:
             from platform_files import register_android_callbacks
 
             register_android_callbacks()
-        except Exception:
-            pass
+        except Exception as exc:
+            Logger.warning("Android callbacks: %s", exc)
 
     def on_resume(self):
         return

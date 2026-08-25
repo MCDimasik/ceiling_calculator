@@ -15,8 +15,8 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.utils import platform
 from kivy.app import App
-from database import init_db, load_all_projects, save_project, delete_project, load_project
-from supplier_db import init_supplier_tables
+from database import load_all_projects, save_project, delete_project, load_project
+from app_bootstrap import ensure_app_storage_ready
 from kivy.uix.relativelayout import RelativeLayout
 from ui_style import COLORS, apply_btn_style, style_title, wrap_button_text, style_text_input, configure_modal_footer_buttons, make_input_row
 from widgets.ui_components import RoundedButton, RoundedLabel
@@ -31,9 +31,6 @@ class ProjectsScreen(Screen):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Инициализируем БД при запуске приложения
-        init_db()
-        init_supplier_tables()
 
         root = FloatLayout()
         self._root = root
@@ -69,6 +66,7 @@ class ProjectsScreen(Screen):
 
     def on_pre_enter(self):
         """← КРИТИЧНО: Загружаем проекты КАЖДЫЙ раз при входе на экран"""
+        ensure_app_storage_ready()
         self._apply_bg()
         # Грузим сразу, иначе во время FadeTransition плитки "прыгают" и появляются рывком.
         self.load_projects()

@@ -9,7 +9,7 @@ from models import Project, Room
 DB_NAME = "ceiling_calculator.db"
 
 
-def _app_user_data_dir() -> str | None:
+def _app_user_data_dir():
     """
     Возвращает папку данных приложения (переживает обновления APK).
     На Android это /data/data/<package>/files.
