@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
 env/
 .env
 
@@ -32,3 +33,16 @@ build-last.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Flutter
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.packages
+flutter_app/build/
+flutter_app/.pub-cache/
+flutter_app/.pub/
+flutter_app/coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+*.iml

@@ -1,0 +1,54 @@
+{
+  "id": "saturn",
+  "name": "Сатурн (счёт Сат-XXXXXX)",
+  "custom_parser": "saturn_v1",
+  "detect": {
+    "min_score": 4,
+    "regex": [
+      "3444261747",
+      "-147189",
+      "-098077"
+    ],
+    "any_contains": [
+      "Сатурн",
+      "Сат-"
+    ]
+  },
+  "supplier": {
+    "fixed_name": "Сатурн"
+  },
+  "skip_articles": [
+    "141436"
+  ],
+  "article_config": {
+    "147189": {
+      "item_key": "armstrong_retail",
+      "receipt_unit": "pack",
+      "units_per_pack": 20
+    },
+    "098077": {
+      "item_key": "guide_3600",
+      "receipt_unit": "piece"
+    },
+    "139653": {
+      "item_key": "guide_1200",
+      "receipt_unit": "piece"
+    },
+    "139654": {
+      "item_key": "guide_600",
+      "receipt_unit": "piece"
+    },
+    "073838": {
+      "item_key": "corner",
+      "receipt_unit": "piece"
+    },
+    "013839": {
+      "item_key": "susp_05",
+      "receipt_unit": "piece"
+    },
+    "226200": {
+      "item_key": "light_fixture_led",
+      "receipt_unit": "piece"
+    }
+  }
+}

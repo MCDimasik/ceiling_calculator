@@ -88,17 +88,12 @@ def _is_rectangle(points, eps=1e-3):
 
 def grilyato_cassette_count(walls, fallback_count):
     """
-    Для прямоугольных помещений берем расчет решеток по методике статьи:
-    ceil(длина/0.6) * ceil(ширина/0.6).
-    Для сложных форм оставляем расчет по раскладке (fallback_count).
+    Закупка кассет: max(ceil(S / 0.36), fallback).
+    ceil(S/0.36) — как у поставщиков (10×10 м → 278).
     """
-    points = _ordered_points_from_walls(walls)
-    if _is_rectangle(points):
-        lengths = _segment_lengths_cm(points)
-        length_m = max(lengths) / 100.0
-        width_m = min(lengths) / 100.0
-        return math.ceil(length_m / 0.6) * math.ceil(width_m / 0.6)
-    return fallback_count
+    area = room_area_m2(walls)
+    from_area = math.ceil(area / 0.36) if area > 0 else 0
+    return max(from_area, int(fallback_count or 0))
 
 
 def auto_rows_for_armstrong(walls):
@@ -173,10 +168,9 @@ def calc_grilyato_gl(walls, cassette_count, rows_3600, rows_2400, cell_size):
     guide_600 = math.ceil((area_m2 * 0.85) / 0.6)
     suspensions = guide_3600 * 4
 
-    # Папа/Мама — как классический Грильято, но по формуле от площади и коэффициента
-    profile = math.ceil((area_m2 / 0.34) * k)
-    # Заглушки (только GL): (Профиль / k) * 4, k = 11 (50x50), 7 (75x75), 5 (100x100)
-    stoppers = math.ceil((profile / float(k)) * 4.0)
+    # Решётка: папа/мама = кассеты × k; L-профиль/заглушки = кассеты × 4
+    profile = cassette_count * k
+    stoppers = cassette_count * 4
 
     return {
         "Профиль Папа": profile,
@@ -195,28 +189,21 @@ def calc_grilyato_classic(walls, cassette_count, rows_3600, rows_2400, cell_size
     area_m2 = room_area_m2(walls)
     cassette_count = grilyato_cassette_count(walls, cassette_count)
 
-    # Классическое Грильято (по ТЗ)
-    # Направляющая 2,4 = ceil(S * 0,7)
-    # Направляющая 0,6 = ceil((S * 1,7) / 0,6)
-    # Профиль Папа/Мама:
-    # 50x50: ceil((S/0,34) * 11)
-    # 75x75: ceil((S/0,34) * 7)
-    # 100x100: ceil((S/0,34) * 5)
-    # Соединитель = направляющая 2,4
-    # Подвес = направляющая 2,4 * 4
-    # Уголок = ceil(P/3)
+    # Каркас как Армстронг, несущие 2400; подвесы ×3; папа/мама = кассеты × k
     corner_3m = ceil_div(perimeter_cm, 300)
-    guide_2400 = math.ceil(area_m2 * 0.7)
-    guide_600 = math.ceil((area_m2 * 1.7) / 0.6)
+    guide_2400 = math.ceil((area_m2 * 0.84) / 2.4)
+    guide_1200 = math.ceil((area_m2 * 1.68) / 1.2)
+    guide_600 = math.ceil((area_m2 * 0.85) / 0.6)
     k = _grilyato_profile_factor(cell_size)
-    profile = math.ceil((area_m2 / 0.34) * k)
+    profile = cassette_count * k
 
     return {
         "Профиль Папа": profile,
         "Профиль Мама": profile,
         "Направляющая 2400": guide_2400,
+        "Направляющая 1200": guide_1200,
         "Направляющая 600": guide_600,
-        "Подвес": guide_2400 * 4,
+        "Подвес": guide_2400 * 3,
         "Уголок": corner_3m,
         "Соединитель": guide_2400,
     }
