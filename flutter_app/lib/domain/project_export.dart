@@ -18,6 +18,7 @@ Map<String, dynamic> buildExportPayload(Project project, {List<Room>? rooms}) {
       'materials_susp': project.materialsSusp,
       'materials_cell': project.materialsCell,
       'master_plan': project.masterPlanJson,
+      'documentation': project.documentationJson,
       'rooms': roomList.map(_roomExportDict).toList(),
     },
   };
@@ -44,6 +45,9 @@ Project decodeProjectFile(String raw) {
     materialsCell: data['materials_cell'] as String?,
     masterPlanJson: data['master_plan'] is Map
         ? Map<String, dynamic>.from(data['master_plan'] as Map)
+        : null,
+    documentationJson: data['documentation'] is Map
+        ? Map<String, dynamic>.from(data['documentation'] as Map)
         : null,
   );
   final roomsRaw = data['rooms'] as List? ?? [];
@@ -81,9 +85,18 @@ Map<String, dynamic> _roomExportDict(Room room) => {
       'floor_grid_offset_y': room.floorGridOffsetY,
       'openings': room.openings,
       'wall_finish_layers': room.wallFinishLayers,
+      'floor_prep_layers': room.floorPrepLayers,
+      'ceiling_prep_layers': room.ceilingPrepLayers,
       'floor_covering_kind': room.floorCoveringKind,
       'floor_laying_pattern': room.floorLayingPattern,
       'floor_layout_rotation_deg': room.floorLayoutRotationDeg,
+      'floor_screed_depth_cm': room.floorScreedDepthCm,
+      'documentation_checklist': room.documentationChecklistJson,
+      'finish_include_floor': room.finishIncludeFloor,
+      'finish_include_walls': room.finishIncludeWalls,
+      'finish_include_ceiling': room.finishIncludeCeiling,
+      'finish_include_extra_works': room.finishIncludeExtraWorks,
+      'sort_index': room.sortIndex,
     };
 
 Room _roomFromExport(Map<String, dynamic> data) {
@@ -116,6 +129,13 @@ Room _roomFromExport(Map<String, dynamic> data) {
   if (wl is List) {
     wallLayers = wl.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
+  List<Map<String, dynamic>> decodeLayerMaps(dynamic raw) {
+    if (raw is! List) return [];
+    return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  final floorPrep = decodeLayerMaps(data['floor_prep_layers']);
+  final ceilingPrep = decodeLayerMaps(data['ceiling_prep_layers']);
   List<Map<String, dynamic>> ceilingGuides = [];
   final cg = data['ceiling_guides'];
   if (cg is List) {
@@ -147,8 +167,19 @@ Room _roomFromExport(Map<String, dynamic> data) {
     floorGridOffsetY: (data['floor_grid_offset_y'] as num?)?.toInt() ?? 0,
     openings: openings,
     wallFinishLayers: wallLayers,
+    floorPrepLayers: floorPrep,
+    ceilingPrepLayers: ceilingPrep,
     floorCoveringKind: data['floor_covering_kind'] as String? ?? 'tile',
     floorLayingPattern: data['floor_laying_pattern'] as String? ?? 'straight',
     floorLayoutRotationDeg: (data['floor_layout_rotation_deg'] as num?)?.toInt() ?? 0,
+    floorScreedDepthCm: (data['floor_screed_depth_cm'] as num?)?.toDouble() ?? 5,
+    documentationChecklistJson: data['documentation_checklist'] is Map
+        ? Map<String, dynamic>.from(data['documentation_checklist'] as Map)
+        : null,
+    finishIncludeFloor: data['finish_include_floor'] as bool? ?? true,
+    finishIncludeWalls: data['finish_include_walls'] as bool? ?? true,
+    finishIncludeCeiling: data['finish_include_ceiling'] as bool? ?? true,
+    finishIncludeExtraWorks: data['finish_include_extra_works'] as bool? ?? true,
+    sortIndex: (data['sort_index'] as num?)?.toInt() ?? 0,
   );
 }

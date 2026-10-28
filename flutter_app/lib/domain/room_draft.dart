@@ -120,6 +120,56 @@ class RoomDraft {
     return pts;
   }
 
+  /// Move corner [index] (from [orderedPoints]) and rebuild wall segments.
+  void moveVertex(int index, double xCm, double yCm, {bool recordUndo = true}) {
+    final pts = orderedPoints();
+    if (index < 0 || index >= pts.length) return;
+    final closed = isClosed;
+    if (recordUndo) saveUndo();
+    final nx = (xCm * 10).round() / 10.0;
+    final ny = (yCm * 10).round() / 10.0;
+    pts[index] = (nx, ny);
+    _rebuildFromPoints(pts, closed: closed);
+  }
+
+  /// Replace contour from ordered corner list (cm).
+  void replacePoints(
+    List<(double, double)> pts, {
+    required bool closed,
+    bool recordUndo = true,
+  }) {
+    if (pts.isEmpty) return;
+    if (recordUndo) saveUndo();
+    _rebuildFromPoints(
+      [
+        for (final p in pts)
+          ((p.$1 * 10).round() / 10.0, (p.$2 * 10).round() / 10.0),
+      ],
+      closed: closed,
+    );
+  }
+
+  void _rebuildFromPoints(List<(double, double)> pts, {required bool closed}) {
+    walls.clear();
+    if (closed && pts.length >= 3) {
+      for (var i = 0; i < pts.length; i++) {
+        final a = pts[i];
+        final b = pts[(i + 1) % pts.length];
+        walls.add([a.$1, a.$2, b.$1, b.$2]);
+      }
+      cursor = [pts[0].$1, pts[0].$2];
+    } else {
+      for (var i = 0; i < pts.length - 1; i++) {
+        final a = pts[i];
+        final b = pts[i + 1];
+        walls.add([a.$1, a.$2, b.$1, b.$2]);
+      }
+      if (pts.isNotEmpty) {
+        cursor = [pts.last.$1, pts.last.$2];
+      }
+    }
+  }
+
   void _apply(_Snap s) {
     walls
       ..clear()

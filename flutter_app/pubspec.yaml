@@ -1,7 +1,8 @@
 name: ceiling_calculator
 description: Flutter port of the Kivy ceiling calculator (layout, materials, suppliers).
 publish_to: "none"
-version: 3.0.0+300
+# versionCode must stay above Kivy/Buildozer (e.g. 2.5.11 → 102120511)
+version: 3.0.0+102120512
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -21,6 +22,12 @@ dependencies:
   share_plus: ^13.3.0
   video_player: ^2.14.0
   video_player_win: ^3.2.2
+  pdf: ^3.13.0
+  image_picker: ^1.2.3
+  archive: ^4.0.9
+  roomplan_flutter: ^0.2.1
+  printing: ^5.15.1
+  flutter_onnxruntime: ^1.9.0
 
 dev_dependencies:
   flutter_test:
@@ -39,4 +46,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/receipt_templates/
+    - assets/document_templates/
+    - assets/doc_import_templates/
     - assets/media/
+    - assets/fonts/
+    - assets/ml/room_walls.onnx

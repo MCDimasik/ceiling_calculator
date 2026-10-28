@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ceiling_calculator/domain/admin_access.dart';
 import 'package:ceiling_calculator/domain/cost_calculator.dart';
 import 'package:ceiling_calculator/domain/finish_model.dart';
 import 'package:ceiling_calculator/domain/models.dart';
@@ -49,11 +48,6 @@ void main() {
     final cost = calculateProjectCost(project, {});
     expect(cost.missingCount, greaterThan(0));
     expect(cost.total, 0);
-  });
-
-  test('admin rejects wrong password', () async {
-    final admin = AdminAccess();
-    expect(await admin.tryUnlock('wrong'), isFalse);
   });
 
   test('finish areas subtract openings', () {

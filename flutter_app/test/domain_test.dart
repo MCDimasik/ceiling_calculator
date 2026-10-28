@@ -71,6 +71,29 @@ void main() {
       expect(grid.lightCount, 1);
     });
 
+    test('crumbs under 1 cm and near-full edge tiles are not cut', () {
+      final walls = [
+        [0.0, 0.0, 600.0, 0.0],
+        [600.0, 0.0, 600.0, 600.0],
+        [600.0, 600.0, 0.0, 600.0],
+        [0.0, 600.0, 0.0, 0.0],
+      ];
+      final points = <(double, double)>[
+        (0, 0),
+        (600, 0),
+        (600, 600),
+        (0, 600),
+      ];
+      final grid = CeilingGrid(cellSizeCm: 60, offsetXCm: 0.4, offsetYCm: 0);
+      grid.rebuild(roomPoints: points, walls: walls);
+      final badCuts = grid.cells.where(
+        (c) =>
+            c.kind == CellKind.cut &&
+            (c.cutXCm < minUsefulCutCm || c.cutYCm < minUsefulCutCm),
+      );
+      expect(badCuts, isEmpty);
+    });
+
     test('rebuild LRU returns identical counts', () {
       CeilingGrid.clearRebuildCache();
       final points = <(double, double)>[(0, 0), (300, 0), (300, 240), (0, 240)];

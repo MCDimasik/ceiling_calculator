@@ -2,18 +2,31 @@
 enum FloorCoveringKind {
   tile,
   laminate,
+  screed,
 }
 
 extension FloorCoveringKindX on FloorCoveringKind {
   String get id => switch (this) {
         FloorCoveringKind.tile => 'tile',
         FloorCoveringKind.laminate => 'laminate',
+        FloorCoveringKind.screed => 'screed',
       };
 
   String get labelRu => switch (this) {
+        FloorCoveringKind.tile => 'Плитка напольная',
+        FloorCoveringKind.laminate => 'Ламинат',
+        FloorCoveringKind.screed => 'Стяжка',
+      };
+
+  /// Short label for segmented buttons.
+  String get labelShortRu => switch (this) {
         FloorCoveringKind.tile => 'Плитка',
         FloorCoveringKind.laminate => 'Ламинат',
+        FloorCoveringKind.screed => 'Стяжка',
       };
+
+  bool get hasBoardLayout =>
+      this == FloorCoveringKind.tile || this == FloorCoveringKind.laminate;
 
   static FloorCoveringKind parse(String? raw) {
     for (final k in FloorCoveringKind.values) {
@@ -47,10 +60,10 @@ extension FloorLayingPatternX on FloorLayingPattern {
       };
 
   String get labelRu => switch (this) {
-        FloorLayingPattern.straight => 'Прямая',
-        FloorLayingPattern.brick => 'Со смещением 1/2',
-        FloorLayingPattern.third => 'Со смещением 1/3',
-        FloorLayingPattern.diagonal => 'Диагональ',
+        FloorLayingPattern.straight => 'Рядами без смещения',
+        FloorLayingPattern.brick => 'Со смещением на ½',
+        FloorLayingPattern.third => 'Со смещением на ⅓',
+        FloorLayingPattern.diagonal => 'По диагонали',
       };
 
   /// Row stagger as fraction of board length (axis-aligned patterns).
@@ -84,7 +97,7 @@ const laminateBoardPresets = <(double, double)>[
   (33, 128.5),
 ];
 
-/// Typical floor tile sizes (W × H cm).
+/// Typical floor tile sizes (width × length cm).
 const floorTilePresets = <(double, double)>[
   (60, 60),
   (30, 30),
@@ -92,3 +105,20 @@ const floorTilePresets = <(double, double)>[
   (90, 60),
   (40, 40),
 ];
+
+/// Default screed thickness (cm).
+const defaultScreedDepthCm = 5.0;
+
+/// Screed volume in m³ from floor area (m²) and thickness (cm).
+double screedVolumeM3(double floorM2, double depthCm) {
+  if (floorM2 <= 0 || depthCm <= 0) return 0;
+  return floorM2 * (depthCm / 100.0);
+}
+
+/// Catalog screed rates are ₽/м²; work in the app is priced ₽/м³.
+double screedCatalogM2ToM3(double pricePerM2, double depthCm) {
+  final d = depthCm <= 0 ? defaultScreedDepthCm : depthCm;
+  final depthM = d / 100.0;
+  if (depthM <= 0 || pricePerM2 <= 0) return 0;
+  return pricePerM2 / depthM;
+}

@@ -1,12 +1,24 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../app_scope.dart';
 import '../domain/finish_model.dart';
 import '../domain/master_plan.dart';
 import '../domain/models.dart';
+import '../domain/project_export.dart';
+import '../domain/project_floors.dart';
+import '../domain/special_space.dart';
+import 'widgets/floor_pager_chip.dart';
 import 'widgets/screen_scaffold.dart';
+
+bool _roomHasPlanFootprint(Room room) => roomPlanWalls(room) != null;
 
 /// Door anchor in world cm (after placement offset + rotation).
 class _DoorAnchor {
@@ -23,7 +35,7 @@ class _DoorAnchor {
   final Offset wallDir;
 }
 
-/// World ↔ scene mapping shared by painter and hit-test.
+/// World - scene mapping shared by painter and hit-test.
 class _PlanView {
   _PlanView({
     required this.minX,
@@ -57,7 +69,7 @@ class _PlanView {
     var minY = double.infinity, maxY = -double.infinity;
     for (final pl in plan.placements) {
       final room = _roomOf(project, pl.roomId);
-      if (room == null || !room.hasLayout) continue;
+      if (room == null || !_roomHasPlanFootprint(room)) continue;
       for (final p in _worldPolygon(room, pl)) {
         minX = math.min(minX, p.dx);
         maxX = math.max(maxX, p.dx);
@@ -102,11 +114,13 @@ Offset _rotateAround(Offset p, Offset origin, double degCw) {
 }
 
 Offset _roomLocalOrigin(Room room) {
-  var minX = room.walls.first[0];
-  var maxX = room.walls.first[0];
-  var minY = room.walls.first[1];
-  var maxY = room.walls.first[1];
-  for (final w in room.walls) {
+  final walls = roomPlanWalls(room) ?? room.walls;
+  if (walls.isEmpty) return Offset.zero;
+  var minX = walls.first[0];
+  var maxX = walls.first[0];
+  var minY = walls.first[1];
+  var maxY = walls.first[1];
+  for (final w in walls) {
     for (final x in [w[0], w[2]]) {
       minX = math.min(minX, x);
       maxX = math.max(maxX, x);
@@ -126,11 +140,13 @@ Offset _toWorldPoint(Offset local, Room room, MasterRoomPlacement pl) {
 }
 
 List<Offset> _worldPolygon(Room room, MasterRoomPlacement pl) {
+  final walls = roomPlanWalls(room) ?? const <List<double>>[];
+  if (walls.isEmpty) return const [];
   final pts = <Offset>[];
-  for (final w in room.walls) {
+  for (final w in walls) {
     pts.add(_toWorldPoint(Offset(w[0], w[1]), room, pl));
   }
-  final last = room.walls.last;
+  final last = walls.last;
   final lastPt = _toWorldPoint(Offset(last[2], last[3]), room, pl);
   if (pts.isEmpty || (pts.last - lastPt).distance > 0.5) pts.add(lastPt);
   return pts;
@@ -166,8 +182,70 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
   int? _selectedRoomId;
   bool _started = false;
   bool _draggingRoom = false;
+  bool _dragHistoryPushed = false;
+  ProjectFloor? _selectedFloor;
   final _transform = TransformationController();
   static const _snapCm = 55.0;
+  final List<String> _undoStack = [];
+  final List<String> _redoStack = [];
+
+  void _pushHistory() {
+    _undoStack.add(jsonEncode(_plan.toJson()));
+    _redoStack.clear();
+    while (_undoStack.length > 40) {
+      _undoStack.removeAt(0);
+    }
+  }
+
+  void _undo() {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(jsonEncode(_plan.toJson()));
+    setState(() {
+      _plan = MasterPlan.fromJson(
+        jsonDecode(_undoStack.removeLast()) as Map<String, dynamic>,
+      );
+    });
+    _persist();
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(jsonEncode(_plan.toJson()));
+    setState(() {
+      _plan = MasterPlan.fromJson(
+        jsonDecode(_redoStack.removeLast()) as Map<String, dynamic>,
+      );
+    });
+    _persist();
+  }
+
+  List<Room> get _floorRooms {
+    final project = _project;
+    if (project == null) return const [];
+    return roomsForPagerFloor(
+      rooms: project.rooms,
+      floors: project.floors,
+      selected: _selectedFloor,
+    );
+  }
+
+  /// Placements for the current floor page (full [_plan] is still persisted).
+  MasterPlan get _visiblePlan {
+    final project = _project;
+    if (project == null || !projectHasExplicitFloors(project.floors)) {
+      return _plan;
+    }
+    final ids = _floorRooms.map((r) => r.id).whereType<int>().toSet();
+    return MasterPlan(
+      name: _plan.name,
+      placements: _plan.placements
+          .where((p) => ids.contains(p.roomId))
+          .toList(),
+      sharedWalls: _plan.sharedWalls
+          .where((s) => ids.contains(s.roomIdA) && ids.contains(s.roomIdB))
+          .toList(),
+    );
+  }
 
   @override
   void didChangeDependencies() {
@@ -190,10 +268,36 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
       _project = project;
       _plan = MasterPlan.fromJson(project?.masterPlanJson);
       _loading = false;
+      if (project != null) {
+        final pages = floorsForPager(project.floors);
+        if (projectHasExplicitFloors(project.floors) && pages.isNotEmpty) {
+          _selectedFloor ??= pages.first;
+        } else {
+          _selectedFloor = null;
+        }
+      }
       if (_plan.placements.isEmpty && project != null) {
         var x = 0.0;
         for (final r in project.rooms) {
-          if (r.id == null || !r.hasLayout) continue;
+          if (r.id == null || !_roomHasPlanFootprint(r)) continue;
+          _plan.placements.add(MasterRoomPlacement(roomId: r.id!, offsetXCm: x));
+          final (minX, maxX, _, _) = _roomBounds(r);
+          x += (maxX - minX) + 40;
+        }
+      } else if (project != null) {
+        // Append specials / new rooms missing from a saved plan.
+        var x = 0.0;
+        for (final pl in _plan.placements) {
+          final r = _roomOf(project, pl.roomId);
+          if (r == null || !_roomHasPlanFootprint(r)) continue;
+          final (minX, maxX, _, _) = _roomBounds(r);
+          x = math.max(x, pl.offsetXCm + (maxX - minX) + 40);
+        }
+        final placed = {for (final pl in _plan.placements) pl.roomId};
+        for (final r in project.rooms) {
+          if (r.id == null || placed.contains(r.id) || !_roomHasPlanFootprint(r)) {
+            continue;
+          }
           _plan.placements.add(MasterRoomPlacement(roomId: r.id!, offsetXCm: x));
           final (minX, maxX, _, _) = _roomBounds(r);
           x += (maxX - minX) + 40;
@@ -203,11 +307,12 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
   }
 
   (double, double, double, double) _roomBounds(Room room) {
-    var minX = room.walls.first[0];
-    var maxX = room.walls.first[0];
-    var minY = room.walls.first[1];
-    var maxY = room.walls.first[1];
-    for (final w in room.walls) {
+    final walls = roomPlanWalls(room) ?? room.walls;
+    var minX = walls.first[0];
+    var maxX = walls.first[0];
+    var minY = walls.first[1];
+    var maxY = walls.first[1];
+    for (final w in walls) {
       for (final x in [w[0], w[2]]) {
         minX = math.min(minX, x);
         maxX = math.max(maxX, x);
@@ -233,15 +338,47 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
     return null;
   }
 
+  Future<void> _exportPng() async {
+    final project = _project;
+    if (project == null || _plan.placements.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Добавьте комнаты на план')),
+      );
+      return;
+    }
+    const size = Size(1600, 1200);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    _MasterPlanPainter(
+      project: project,
+      plan: _visiblePlan,
+      selectedRoomId: null,
+    ).paint(canvas, size);
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.width.toInt(), size.height.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (bytes == null) return;
+    final dir = await getTemporaryDirectory();
+    final file = File(
+      p.join(dir.path, '${safeExportBasename(project.name)}_master_plan.png'),
+    );
+    await file.writeAsBytes(bytes.buffer.asUint8List());
+    await SharePlus.instance.share(
+      ShareParams(files: [XFile(file.path)], subject: 'План объекта · ${project.name}'),
+    );
+  }
+
   List<_DoorAnchor> _doorsFor(Room room, MasterRoomPlacement pl) {
     final out = <_DoorAnchor>[];
-    final openings = room.openings.map(RoomOpening.fromJson).toList();
+    final walls = roomPlanWalls(room) ?? const <List<double>>[];
+    final openings = roomPlanOpenings(room);
     for (var i = 0; i < openings.length; i++) {
       final o = openings[i];
       if (o.kind != 'door') continue;
       final wi = o.wallIndex;
-      if (wi == null || wi < 0 || wi >= room.walls.length) continue;
-      final w = room.walls[wi];
+      if (wi == null || wi < 0 || wi >= walls.length) continue;
+      final w = walls[wi];
       final ax = w[0], ay = w[1], bx = w[2], by = w[3];
       final len = math.sqrt(math.pow(bx - ax, 2) + math.pow(by - ay, 2));
       if (len < 1) continue;
@@ -331,7 +468,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
   }
 
   void _addRoom(Room room) {
-    if (room.id == null || !room.hasLayout) return;
+    if (room.id == null || !_roomHasPlanFootprint(room)) return;
     if (_plan.placements.any((p) => p.roomId == room.id)) return;
     var x = 0.0;
     for (final pl in _plan.placements) {
@@ -340,6 +477,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
       final (minX, maxX, _, _) = _roomBounds(r);
       x = math.max(x, pl.offsetXCm + (maxX - minX) + 40);
     }
+    _pushHistory();
     setState(() {
       _plan.placements.add(MasterRoomPlacement(roomId: room.id!, offsetXCm: x));
       _selectedRoomId = room.id;
@@ -352,6 +490,10 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
     if (id == null) return;
     final i = _plan.placements.indexWhere((p) => p.roomId == id);
     if (i < 0) return;
+    if (!_dragHistoryPushed) {
+      _pushHistory();
+      _dragHistoryPushed = true;
+    }
     setState(() {
       _plan.placements[i].offsetXCm += dx;
       _plan.placements[i].offsetYCm += dy;
@@ -363,6 +505,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
     if (id == null) return;
     final pl = _placementOf(id);
     if (pl == null) return;
+    _pushHistory();
     setState(() {
       pl.rotationDeg = (pl.rotationDeg + 90) % 360;
       // Clear shared walls involving this room — geometry changed.
@@ -373,9 +516,9 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
 
   double get _totalFloorM2 {
     var sum = 0.0;
-    for (final pl in _plan.placements) {
+    for (final pl in _visiblePlan.placements) {
       final r = _roomById(pl.roomId);
-      if (r == null || !r.hasLayout) continue;
+      if (r == null || !_roomHasPlanFootprint(r)) continue;
       sum += _polygonAreaM2(r.walls);
     }
     return sum;
@@ -397,17 +540,18 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
 
   int? _hitRoom(Offset scene, Size sceneSize) {
     final project = _project;
-    if (project == null || _plan.placements.isEmpty) return null;
-    final view = _PlanView.compute(project: project, plan: _plan, size: sceneSize);
+    final plan = _visiblePlan;
+    if (project == null || plan.placements.isEmpty) return null;
+    final view = _PlanView.compute(project: project, plan: plan, size: sceneSize);
     if (view == null) return null;
     final world = view.toWorld(scene);
 
     // Collect hits; prefer smaller area if overlap, then last drawn.
     int? bestId;
     var bestArea = double.infinity;
-    for (final pl in _plan.placements) {
+    for (final pl in plan.placements) {
       final room = _roomById(pl.roomId);
-      if (room == null || !room.hasLayout) continue;
+      if (room == null || !_roomHasPlanFootprint(room)) continue;
       final pts = _worldPolygon(room, pl);
       if (!_pointInPoly(pts, world)) continue;
       var area = 0.0;
@@ -427,24 +571,61 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const ScreenScaffold(body: Center(child: CircularProgressIndicator()));
     }
     final project = _project;
     if (project == null) {
-      return Scaffold(
+      return ScreenScaffold(
         appBar: AppBar(title: const Text('План объекта')),
         body: const Center(child: Text('Проект не найден')),
       );
     }
 
-    final available = project.rooms
-        .where((r) => r.id != null && r.hasLayout && !_plan.placements.any((p) => p.roomId == r.id))
+    final floorRooms = _floorRooms;
+    final floorIds = floorRooms.map((r) => r.id).whereType<int>().toSet();
+    final available = floorRooms
+        .where((r) =>
+            r.id != null &&
+            _roomHasPlanFootprint(r) &&
+            !_plan.placements.any((p) => p.roomId == r.id))
         .toList();
+    final visiblePlacements = projectHasExplicitFloors(project.floors)
+        ? _plan.placements.where((p) => floorIds.contains(p.roomId)).toList()
+        : _plan.placements;
 
-    return ScreenScaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        await _persist();
+        if (mounted) Navigator.of(context).pop();
+      },
+      child: ScreenScaffold(
       appBar: AppBar(
         title: Text(_plan.name),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () async {
+            await _persist();
+            if (mounted) Navigator.of(context).pop();
+          },
+        ),
         actions: [
+          IconButton(
+            tooltip: 'Отменить',
+            onPressed: _undoStack.isEmpty ? null : _undo,
+            icon: const Icon(Icons.undo, size: 22),
+          ),
+          IconButton(
+            tooltip: 'Повторить',
+            onPressed: _redoStack.isEmpty ? null : _redo,
+            icon: const Icon(Icons.redo, size: 22),
+          ),
+          IconButton(
+            tooltip: 'PNG',
+            onPressed: _exportPng,
+            icon: const Icon(Icons.image_outlined),
+          ),
           IconButton(
             tooltip: 'Сохранить',
             onPressed: _persist,
@@ -454,6 +635,14 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
       ),
       body: Column(
         children: [
+          if (projectHasExplicitFloors(project.floors)) ...[
+            const SizedBox(height: 8),
+            FloorPagerChip(
+              floors: project.floors,
+              selected: _selectedFloor,
+              onSelected: (f) => setState(() => _selectedFloor = f),
+            ),
+          ],
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Column(
@@ -466,8 +655,8 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Комнат: ${_plan.placements.length}  ·  '
-                  'Стыков по дверям: ${_plan.sharedWalls.length}  ·  '
+                  'На плане: ${visiblePlacements.length}  ·  '
+                  'Стыков по дверям: ${_visiblePlan.sharedWalls.length}  ·  '
                   'Пол ≈ ${_totalFloorM2.toStringAsFixed(2)} м²',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
@@ -478,7 +667,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
                     children: [
                       for (final r in available)
                         ActionChip(
-                          label: Text('＋ ${r.name}'),
+                          label: Text('+ ${r.name}'),
                           onPressed: () => _addRoom(r),
                         ),
                     ],
@@ -528,7 +717,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
                                   if (e.localDelta == Offset.zero) return;
                                   final view = _PlanView.compute(
                                     project: project,
-                                    plan: _plan,
+                                    plan: _visiblePlan,
                                     size: sceneSize,
                                   );
                                   if (view == null) return;
@@ -540,20 +729,32 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
                                 onPointerUp: (_) {
                                   final wasDragging = _draggingRoom;
                                   final id = _selectedRoomId;
-                                  setState(() => _draggingRoom = false);
+                                  setState(() {
+                                    _draggingRoom = false;
+                                    _dragHistoryPushed = false;
+                                  });
                                   if (wasDragging && id != null) {
                                     setState(() => _trySnapDoors(id));
                                     _persist();
                                   }
                                 },
                                 onPointerCancel: (_) {
-                                  setState(() => _draggingRoom = false);
+                                  final wasDragging = _draggingRoom;
+                                  final id = _selectedRoomId;
+                                  setState(() {
+                                    _draggingRoom = false;
+                                    _dragHistoryPushed = false;
+                                  });
+                                  if (wasDragging && id != null) {
+                                    setState(() => _trySnapDoors(id));
+                                    _persist();
+                                  }
                                 },
                                 child: CustomPaint(
                                   size: sceneSize,
                                   painter: _MasterPlanPainter(
                                     project: project,
-                                    plan: _plan,
+                                    plan: _visiblePlan,
                                     selectedRoomId: _selectedRoomId,
                                   ),
                                 ),
@@ -608,12 +809,15 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
                     IconButton(
                       tooltip: 'Убрать с плана',
                       onPressed: () {
+                        _pushHistory();
                         setState(() {
                           _plan.sharedWalls.removeWhere(
                             (s) =>
-                                s.roomIdA == _selectedRoomId || s.roomIdB == _selectedRoomId,
+                                s.roomIdA == _selectedRoomId ||
+                                s.roomIdB == _selectedRoomId,
                           );
-                          _plan.placements.removeWhere((p) => p.roomId == _selectedRoomId);
+                          _plan.placements
+                              .removeWhere((p) => p.roomId == _selectedRoomId);
                           _selectedRoomId = null;
                         });
                         _persist();
@@ -625,6 +829,7 @@ class _MasterPlanScreenState extends State<MasterPlanScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -662,7 +867,7 @@ class _MasterPlanPainter extends CustomPainter {
 
     for (final pl in plan.placements) {
       final room = _roomOf(project, pl.roomId);
-      if (room == null || !room.hasLayout) continue;
+      if (room == null || !_roomHasPlanFootprint(room)) continue;
       final pts = _worldPolygon(room, pl);
       final selected = pl.roomId == selectedRoomId;
       final path = Path()..moveTo(view.toScene(pts.first).dx, view.toScene(pts.first).dy);
@@ -702,12 +907,12 @@ class _MasterPlanPainter extends CustomPainter {
       )..layout(maxWidth: 120);
       tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
 
-      for (final raw in room.openings) {
-        final o = RoomOpening.fromJson(raw);
+      final planWalls = roomPlanWalls(room) ?? const <List<double>>[];
+      for (final o in roomPlanOpenings(room)) {
         if (o.kind != 'door' || o.wallIndex == null) continue;
         final wi = o.wallIndex!;
-        if (wi < 0 || wi >= room.walls.length) continue;
-        final w = room.walls[wi];
+        if (wi < 0 || wi >= planWalls.length) continue;
+        final w = planWalls[wi];
         final ax = w[0], ay = w[1], bx = w[2], by = w[3];
         final len = math.sqrt(math.pow(bx - ax, 2) + math.pow(by - ay, 2));
         if (len < 1) continue;

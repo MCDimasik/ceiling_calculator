@@ -23,8 +23,10 @@ android {
     }
 
     defaultConfig {
-        applicationId = "org.ceiling.ceiling_calculator"
-        minSdk = flutter.minSdkVersion
+        // Same id as Kivy/Buildozer (`package.domain` + `package.name`) so APK
+        // installs as an update and keeps existing app data.
+        applicationId = "org.test.ceiling_calculator_alpha"
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -57,6 +59,11 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    implementation("com.google.ar:core:1.44.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }
 
 flutter {

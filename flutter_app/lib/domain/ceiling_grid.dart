@@ -6,6 +6,9 @@ import 'package:flutter/foundation.dart';
 /// Type of a cell relative to the room polygon.
 enum CellKind { outside, full, cut }
 
+/// Useful cut shorter than this is treated as crumb/outside (grid moves in 1 cm steps).
+const double minUsefulCutCm = 1.0;
+
 /// One configurable tile cell of the ceiling grid.
 @immutable
 class GridCell {
@@ -33,7 +36,10 @@ class GridCell {
 
   bool get acceptsLight {
     if (kind == CellKind.outside) return false;
-    if (kind == CellKind.cut && (cutXCm < 1.0 || cutYCm < 1.0)) return false;
+    if (kind == CellKind.cut &&
+        (cutXCm < minUsefulCutCm || cutYCm < minUsefulCutCm)) {
+      return false;
+    }
     return true;
   }
 
@@ -456,7 +462,7 @@ class CeilingGrid {
       y2: y2,
     );
 
-    if (usefulX <= eps || usefulY <= eps) {
+    if (usefulX < minUsefulCutCm || usefulY < minUsefulCutCm) {
       return (kind: CellKind.outside, cutX: 0.0, cutY: 0.0);
     }
 

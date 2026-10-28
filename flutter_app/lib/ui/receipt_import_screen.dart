@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'widgets/screen_scaffold.dart';
 import 'package:flutter/services.dart';
 
 import '../app_scope.dart';
@@ -80,26 +82,8 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (!AppScope.of(context).admin.unlocked) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Только для администратора')),
-        );
-        return;
-      }
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!AppScope.of(context).admin.unlocked) {
-      return const SizedBox.shrink();
-    }
-    return Scaffold(
+    return ScreenScaffold(
       appBar: AppBar(title: const Text('Импорт чека')),
       body: ListView(
         padding: const EdgeInsets.all(16),

@@ -5,16 +5,28 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
+import '../data/project_repository.dart';
 import '../domain/ceiling_grid.dart';
 import '../domain/ceiling_guides.dart';
 import '../domain/finish_model.dart';
+import '../domain/finish_vedomost.dart';
 import '../domain/materials_calculator.dart';
 import '../domain/models.dart';
+import '../domain/design_ceiling_features_baseline.dart';
+import '../domain/design_walls_baseline.dart';
+import '../domain/finish_design_baseline.dart';
+import '../domain/layout_design_baseline.dart';
+import '../domain/wall_polygon_diff.dart';
+import '../domain/layout_layers.dart';
+import '../domain/layout_undo.dart';
+import '../domain/documentation_model.dart';
 import '../domain/project_materials.dart';
+import 'materials_flow_screens.dart';
 import 'materials_result_screen.dart';
-import 'finish_room_screen.dart';
+import 'room_navigation.dart';
 import 'widgets/canvas_palette.dart';
 import 'widgets/controls.dart';
+import 'widgets/layout_canvas_painter.dart';
 
 enum LayoutMode { pan, grid, lights, guides }
 
@@ -32,14 +44,14 @@ class LayoutScreen extends StatefulWidget {
   State<LayoutScreen> createState() => _LayoutScreenState();
 }
 
-class _LayoutScreenState extends State<LayoutScreen> {
+class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver {
   Room? _room;
+  Project? _project;
+  ProjectRepository? _projects;
   final _grid = CeilingGrid();
   final _transform = TransformationController();
   LayoutMode _mode = LayoutMode.grid;
   bool _loading = true;
-  bool _showTileDims = true;
-  bool _showWallDims = true;
 
   /// Live offset for cheap visual grid while dragging/nudging.
   double _visualOffsetX = 0;
@@ -60,30 +72,164 @@ class _LayoutScreenState extends State<LayoutScreen> {
   double? _dragSmoothX;
   double? _dragSmoothY;
 
-  _LayoutMetrics? _lastMetrics;
+  /// Long-press on clear: expand kind pills to the right.
+  bool _showGuideKindClear = false;
+
+  LayoutMetrics? _lastMetrics;
 
   Timer? _rebuildThrottle;
   bool _rebuildPending = false;
   Timer? _liveGridThrottle;
   Timer? _viewCullThrottle;
+  Timer? _autosaveTimer;
   bool _viewApplied = false;
+  /// When true, next `_applyOrCenterView` ignores saved camera and fits room.
+  bool _forceFitNext = false;
   bool _canvasReady = false;
+  double _anchorOffsetX = 0;
+  double _anchorOffsetY = 0;
+  bool _gridPanUndoPushed = false;
+  LayoutLayerVisibility _layers = const LayoutLayerVisibility();
+  final _undoStack = LayoutUndoStack();
+
+  void _pushUndoSnapshot() {
+    _undoStack.push(
+      LayoutEditSnapshot.capture(
+        gridOffsetX: _grid.offsetXCm.round(),
+        gridOffsetY: _grid.offsetYCm.round(),
+        visualOffsetX: _visualOffsetX,
+        visualOffsetY: _visualOffsetY,
+        lightIds: _lightIds,
+        guides: _guides,
+      ),
+    );
+  }
+
+  void _applySnapshot(LayoutEditSnapshot snap, Room room) {
+    _grid.offsetXCm = snap.gridOffsetX.toDouble();
+    _grid.offsetYCm = snap.gridOffsetY.toDouble();
+    _visualOffsetX = snap.visualOffsetX;
+    _visualOffsetY = snap.visualOffsetY;
+    _lightIds
+      ..clear()
+      ..addAll(snap.lightIds);
+    _guides
+      ..clear()
+      ..addAll(
+        {
+          for (final e in snap.guidesJson.entries)
+            if (CeilingGuideMark.fromJson(
+                  Map<String, dynamic>.from(e.value as Map),
+                  offsetX: snap.visualOffsetX,
+                  offsetY: snap.visualOffsetY,
+                  cellSize: _grid.cellSizeCm,
+                )
+                case final g?)
+              e.key: g,
+        },
+      );
+    _rebuildGrid(room);
+  }
+
+  void _undoLayout(Room room) {
+    final snap = _undoStack.undo();
+    if (snap == null) return;
+    setState(() => _applySnapshot(snap, room));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Отменено'), duration: Duration(seconds: 2)),
+      );
+    }
+  }
+
+  void _redoLayout(Room room) {
+    final snap = _undoStack.redo();
+    if (snap == null) return;
+    setState(() => _applySnapshot(snap, room));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Повторено'), duration: Duration(seconds: 2)),
+      );
+    }
+  }
+
+  void _setLayerValue(LayoutLayerVisibility Function(LayoutLayerVisibility) update) {
+    setState(() {
+      final next = update(_layers);
+      final visible =
+          next.walls || next.grid || next.guides || next.lights || next.floor || next.notes;
+      if (!visible) return;
+      _layers = next;
+    });
+    _captureViewToRoom();
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _transform.addListener(_onTransformChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // ignore: discarded_futures
+      _flushAutosave();
+    }
+  }
+
+  @override
   void dispose() {
+    // Best-effort sync write before tearing down (cannot await dispose).
+    _flushAutosaveSync();
+    WidgetsBinding.instance.removeObserver(this);
+    _autosaveTimer?.cancel();
     _rebuildThrottle?.cancel();
     _liveGridThrottle?.cancel();
     _viewCullThrottle?.cancel();
     _transform.removeListener(_onTransformChanged);
     _transform.dispose();
     super.dispose();
+  }
+
+  void _scheduleAutosave() {
+    _autosaveTimer?.cancel();
+    _autosaveTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
+      _persist(markLayoutConfirmed: false);
+    });
+  }
+
+  Future<void> _flushAutosave() async {
+    if (_autosaveTimer == null) return;
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
+    await _persist(markLayoutConfirmed: false);
+  }
+
+  /// Sync snapshot + fire-and-forget DB write (dispose path).
+  void _flushAutosaveSync() {
+    if (_autosaveTimer == null) return;
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
+    final room = _room;
+    if (room == null) return;
+    _commitGridOffset(room);
+    room.gridOffsetX = _grid.offsetXCm.round();
+    room.gridOffsetY = _grid.offsetYCm.round();
+    room.lightFixtures = _lightIds.map((id) {
+      final parts = id.split(':');
+      return [int.parse(parts[0]), int.parse(parts[1])];
+    }).toList();
+    _captureViewToRoom();
+    room.ceilingGuides = _guides.values.map((g) => g.toJson()).toList();
+    final projects = _projects;
+    if (projects != null) {
+      // ignore: discarded_futures
+      projects.updateRoom(room);
+    }
   }
 
   void _onTransformChanged() {
@@ -94,9 +240,48 @@ class _LayoutScreenState extends State<LayoutScreen> {
     });
   }
 
-  void _applyOrCenterView(Size viewport, Size canvasSize, _LayoutMetrics metrics) {
+  bool _viewShowsRoom(Size viewport, LayoutMetrics metrics) {
+    final roomRect = Rect.fromLTWH(
+      metrics.ox,
+      metrics.oy,
+      metrics.roomWidthPx,
+      metrics.roomHeightPx,
+    );
+    for (final corner in [
+      roomRect.topLeft,
+      roomRect.topRight,
+      roomRect.bottomLeft,
+      roomRect.bottomRight,
+    ]) {
+      final p = MatrixUtils.transformPoint(_transform.value, corner);
+      if (p.dx < -viewport.width * 0.08 ||
+          p.dx > viewport.width * 1.08 ||
+          p.dy < -viewport.height * 0.08 ||
+          p.dy > viewport.height * 1.08) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _applyOrCenterView(Size viewport, Size canvasSize, LayoutMetrics metrics) {
     if (_viewApplied || _room == null) return;
     _viewApplied = true;
+
+    if (!_forceFitNext) {
+      final saved = ViewTransform.tryParse(_room!.layoutViewJson);
+      if (saved != null &&
+          saved.scale.isFinite &&
+          saved.scale > 0.05 &&
+          saved.tx.isFinite &&
+          saved.ty.isFinite) {
+        _transform.value = saved.toMatrix();
+        if (_viewShowsRoom(viewport, metrics)) {
+          return;
+        }
+      }
+    }
+    _forceFitNext = false;
 
     final focal = metrics.roomCentroidScreen;
     final fitScale = metrics.fitScaleForViewport(viewport);
@@ -104,16 +289,22 @@ class _LayoutScreenState extends State<LayoutScreen> {
       ..translateByDouble(viewport.width / 2, viewport.height / 2, 0, 1)
       ..scaleByDouble(fitScale, fitScale, 1, 1)
       ..translateByDouble(-focal.dx, -focal.dy, 0, 1);
+    _captureViewToRoom();
   }
 
   void _captureViewToRoom() {
     final room = _room;
     if (room == null) return;
-    room.layoutViewJson = ViewTransform.fromMatrix(_transform.value).toJson();
+    final view = Map<String, dynamic>.from(room.layoutViewJson ?? {});
+    view.addAll(ViewTransform.fromMatrix(_transform.value).toJson());
+    view['layers'] = _layers.toJson();
+    room.layoutViewJson = view;
   }
 
   Future<void> _load() async {
-    final project = await AppScope.of(context).projects.getProject(widget.projectId);
+    final projects = AppScope.of(context).projects;
+    _projects = projects;
+    final project = await projects.getProject(widget.projectId);
     Room? room;
     if (project != null) {
       for (final r in project.rooms) {
@@ -124,11 +315,31 @@ class _LayoutScreenState extends State<LayoutScreen> {
     setState(() {
       _viewApplied = false;
       _canvasReady = false;
+      _project = project;
       _room = room;
       _loading = false;
       if (room != null) {
+        final layersRaw = room.layoutViewJson?['layers'];
+        final layersMap =
+            layersRaw is Map ? Map<String, dynamic>.from(layersRaw) : null;
+        if (layersMap != null) {
+          _layers = LayoutLayerVisibility.fromJson(layersMap);
+        } else {
+          _layers = const LayoutLayerVisibility();
+        }
+        // Floor overlay is for finish module — never show on ceiling layout canvas.
+        _layers = _layers.copyWith(floor: false);
+        final noteText =
+            RoomDocumentationChecklist.fromJson(room.documentationChecklistJson).notes.trim();
+        if (noteText.isNotEmpty && (layersMap == null || !layersMap.containsKey('notes'))) {
+          _layers = _layers.copyWith(notes: true);
+        }
         _visualOffsetX = room.gridOffsetX.toDouble();
         _visualOffsetY = room.gridOffsetY.toDouble();
+        _snapVisualOffsetToCm();
+        _anchorOffsetX = _visualOffsetX;
+        _anchorOffsetY = _visualOffsetY;
+        _grid.cellSizeCm = layoutTileCm;
         _lightIds
           ..clear()
           ..addAll(
@@ -149,7 +360,18 @@ class _LayoutScreenState extends State<LayoutScreen> {
             ).map((g) => MapEntry(g.storageKey, g)),
           );
         _mode = _shouldDefaultPan(room) ? LayoutMode.pan : LayoutMode.grid;
+        _syncMainGuideKindFromCeiling();
         _canvasReady = true;
+        _undoStack.seed(
+          LayoutEditSnapshot.capture(
+            gridOffsetX: _grid.offsetXCm.round(),
+            gridOffsetY: _grid.offsetYCm.round(),
+            visualOffsetX: _visualOffsetX,
+            visualOffsetY: _visualOffsetY,
+            lightIds: _lightIds,
+            guides: _guides,
+          ),
+        );
       }
     });
   }
@@ -162,6 +384,27 @@ class _LayoutScreenState extends State<LayoutScreen> {
             room.layoutViewJson != null ||
             room.gridOffsetX != 0 ||
             room.gridOffsetY != 0);
+  }
+
+  /// Main runner chip: 3600 for Armstrong/GL, 2400 for classic Grilyato.
+  /// Prefers kinds already on the drawing when present.
+  void _syncMainGuideKindFromCeiling() {
+    final room = _room;
+    GuideKind main = GuideKind.g3600;
+    if (room != null) {
+      final (ceiling, _, _) =
+          roomEffectiveConfig(room, _project ?? Project(name: ''));
+      main = ceilingFrameTemplateForLabel(ceiling).mainGuideKind;
+    }
+    if (_guides.values.any((g) => g.kind == GuideKind.g2400)) {
+      main = GuideKind.g2400;
+    } else if (_guides.values.any((g) => g.kind == GuideKind.g3600)) {
+      main = GuideKind.g3600;
+    }
+    _mainGuideKind = main;
+    if (_guideKind == GuideKind.g3600 || _guideKind == GuideKind.g2400) {
+      _guideKind = main;
+    }
   }
 
   bool _canConfirmLayout(Room room) =>
@@ -194,20 +437,32 @@ class _LayoutScreenState extends State<LayoutScreen> {
       ..addAll(next);
   }
 
-  /// Sync grid to visual offset; optionally wrap. Preserves light/guide world positions.
+  void _clampVisualOffset() {
+    final cw = _grid.cellWidthCm <= 0 ? layoutTileCm : _grid.cellWidthCm;
+    final ch = _grid.cellHeightCm <= 0 ? layoutTileCm : _grid.cellHeightCm;
+    _visualOffsetX = _visualOffsetX.clamp(_anchorOffsetX - cw, _anchorOffsetX + cw);
+    _visualOffsetY = _visualOffsetY.clamp(_anchorOffsetY - ch, _anchorOffsetY + ch);
+  }
+
+  /// Grid offset moves in whole centimeters (joystick and finger drag).
+  void _snapVisualOffsetToCm() {
+    _visualOffsetX = _visualOffsetX.roundToDouble();
+    _visualOffsetY = _visualOffsetY.roundToDouble();
+    _clampVisualOffset();
+  }
+
+  /// Sync grid to visual offset; clamp to ±1 cell from anchor. Preserves light/guide world positions.
   void _syncGridToVisual(Room room, {required bool wrap}) {
     final cw = _grid.cellWidthCm <= 0 ? 60.0 : _grid.cellWidthCm;
     final ch = _grid.cellHeightCm <= 0 ? 60.0 : _grid.cellHeightCm;
     final prevGridX = _grid.offsetXCm;
     final prevGridY = _grid.offsetYCm;
-    final preWrapX = _visualOffsetX;
-    final preWrapY = _visualOffsetY;
 
-    final nextX = wrap ? _wrapOffset(preWrapX, cw) : preWrapX;
-    final nextY = wrap ? _wrapOffset(preWrapY, ch) : preWrapY;
-
-    final dragDx = preWrapX - prevGridX;
-    final dragDy = preWrapY - prevGridY;
+    _clampVisualOffset();
+    final nextX = _visualOffsetX.roundToDouble();
+    final nextY = _visualOffsetY.roundToDouble();
+    final dragDx = nextX - prevGridX;
+    final dragDy = nextY - prevGridY;
     final lightWorlds = <(double, double)>[];
     for (final c in _grid.cells) {
       if (_lightIds.contains(c.id)) {
@@ -216,12 +471,6 @@ class _LayoutScreenState extends State<LayoutScreen> {
           c.yCm + dragDy + ch / 2,
         ));
       }
-    }
-
-    if (wrap) {
-      final hLineDelta = ((preWrapY - nextY) / ch).round();
-      final vLineDelta = ((preWrapX - nextX) / cw).round();
-      _shiftGuideLineIndices(hLineDelta, vLineDelta);
     }
 
     _visualOffsetX = nextX;
@@ -259,7 +508,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
     _lightIds.removeWhere((id) => !lit.contains(id));
   }
 
-  void _commitGridOffset(Room room) => _syncGridToVisual(room, wrap: true);
+  void _commitGridOffset(Room room) => _syncGridToVisual(room, wrap: false);
 
   void _scheduleLiveGridSync(Room room) {
     if (_liveGridThrottle?.isActive ?? false) return;
@@ -304,6 +553,8 @@ class _LayoutScreenState extends State<LayoutScreen> {
   }
 
   Future<void> _persist({bool markLayoutConfirmed = true}) async {
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
     final room = _room;
     if (room == null) return;
     _commitGridOffset(room);
@@ -317,11 +568,80 @@ class _LayoutScreenState extends State<LayoutScreen> {
     room.ceilingGuides = _guides.values.map((g) => g.toJson()).toList();
     if (markLayoutConfirmed && _canConfirmLayout(room)) {
       room.layoutConfirmed = true;
+      // Never silent-rebaseline: that wipes project-vs-fact deltas.
+      // Explicit rebaseline lives in Finish («Обновить проектную базу»).
+      ensureFinishDesignBaseline(room);
     }
     await AppScope.of(context).projects.updateRoom(room);
   }
 
-  void _onTapUp(TapUpDetails d, _LayoutMetrics m) {
+  /// If the operator left without placing guides, build the standard carrier frame
+  /// so materials never fall back to area formulas.
+  void _ensureAutoGuidesIfEmpty(Room room) {
+    if (_guides.isNotEmpty || room.walls.length < 3) return;
+    final project = _project ?? Project(name: '');
+    final (ceilingLabel, _, cellLabel) = roomEffectiveConfig(room, project);
+    final marks = autoGuideMarksForRoom(
+      walls: room.walls,
+      offsetX: _visualOffsetX,
+      offsetY: _visualOffsetY,
+      cellSize: layoutTileCm,
+      ceilingLabel: ceilingLabel,
+      cellSizeLabel: cellLabel,
+    );
+    if (marks.isEmpty) return;
+    _guides
+      ..clear()
+      ..addEntries(marks.map((g) => MapEntry(g.storageKey, g)));
+  }
+
+  Future<void> _leaveLayout() async {
+    // Do not silently confirm layout or invent carrier guides on back.
+    await _persist(markLayoutConfirmed: false);
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _persistWithAutoGuides({bool markLayoutConfirmed = true}) async {
+    final room = _room;
+    if (room != null) {
+      _ensureAutoGuidesIfEmpty(room);
+    }
+    await _persist(markLayoutConfirmed: markLayoutConfirmed);
+  }
+
+  Future<void> _editNotes() async {
+    final room = _room;
+    if (room == null) return;
+    final cl = RoomDocumentationChecklist.fromJson(room.documentationChecklistJson);
+    final ctrl = TextEditingController(text: cl.notes);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Заметка на чертеже'),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 5,
+          decoration: const InputDecoration(hintText: 'Подписи, замечания прораба…'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    final text = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
+    cl.notes = text;
+    room.documentationChecklistJson = cl.toJson();
+    await AppScope.of(context).projects.updateRoom(room);
+    setState(() {
+      if (text.isNotEmpty) _layers = _layers.copyWith(notes: true);
+      _captureViewToRoom();
+    });
+  }
+
+  void _onTapUp(TapUpDetails d, LayoutMetrics m) {
     if (_room == null) return;
     if (_mode == LayoutMode.lights) {
       _onLightTap(d, m);
@@ -330,7 +650,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
     }
   }
 
-  void _onLightTap(TapUpDetails d, _LayoutMetrics m) {
+  void _onLightTap(TapUpDetails d, LayoutMetrics m) {
     if (_room == null) return;
     final world = m.screenToWorld(d.localPosition);
     final cell = _grid.cellSizeCm;
@@ -349,6 +669,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
       }
     }
     if (hit == null || !hit.acceptsLight) return;
+    _pushUndoSnapshot();
     setState(() {
       final id = hit!.id;
       if (_lightIds.contains(id)) {
@@ -358,9 +679,10 @@ class _LayoutScreenState extends State<LayoutScreen> {
       }
       _grid.toggleLight(hit.col, hit.row);
     });
+    _scheduleAutosave();
   }
 
-  void _onGuideTap(TapUpDetails d, _LayoutMetrics m) {
+  void _onGuideTap(TapUpDetails d, LayoutMetrics m) {
     if (_floatingGuide != null || _room == null) return;
     final world = m.screenToWorld(d.localPosition);
     final cell = _grid.cellSizeCm;
@@ -368,6 +690,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
 
     final existing = _hitExistingGuide(world, tol);
     if (existing != null) {
+      _pushUndoSnapshot();
       setState(() {
         if (_guides[existing]?.kind == _guideKind) {
           _guides.remove(existing);
@@ -381,6 +704,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
           );
         }
       });
+      _scheduleAutosave();
       return;
     }
 
@@ -400,25 +724,40 @@ class _LayoutScreenState extends State<LayoutScreen> {
       kind: _guideKind,
       anchorAlongIndex: placement.anchorIndex,
     );
+    _pushUndoSnapshot();
     setState(() => _guides[key] = placed);
+    _scheduleAutosave();
   }
 
   Future<void> _openFrameTemplateDialog() async {
     final room = _room;
     if (room == null) return;
 
-    var template = CeilingFrameTemplate.armstrong;
-    final has2400 = _mainGuideKind == GuideKind.g2400 ||
-        _guideKind == GuideKind.g2400 ||
-        _guides.values.any((g) => g.kind == GuideKind.g2400);
-    final existingCeiling = room.materialsCeiling;
-    if (has2400) {
-      template = CeilingFrameTemplate.grilyatoClassic;
-    } else if (existingCeiling == 'Грильято') {
-      template = CeilingFrameTemplate.grilyatoClassic;
-    } else if (existingCeiling == 'GL') {
-      template = CeilingFrameTemplate.grilyatoGl;
+    if (_guides.length > 1) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Перезаписать направляющие?'),
+          content: Text(
+            'На чертеже уже ${_guides.length} линий каркаса. '
+            'Шаблон заменит всю разметку направляющих.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Построить')),
+          ],
+        ),
+      );
+      if (proceed != true || !mounted) return;
     }
+
+    // 3600 → Armstrong, 2400 → Grilyato (by active guide kind or placed guides).
+    final uses2400 = _guideKind == GuideKind.g2400 ||
+        _mainGuideKind == GuideKind.g2400 ||
+        _guides.values.any((g) => g.kind == GuideKind.g2400);
+    var template = uses2400
+        ? CeilingFrameTemplate.grilyatoClassic
+        : CeilingFrameTemplate.armstrong;
     var cell = room.materialsCell ?? '100x100';
     if (cell != '50x50' && cell != '75x75' && cell != '100x100') {
       cell = '100x100';
@@ -482,7 +821,9 @@ class _LayoutScreenState extends State<LayoutScreen> {
                       _guides.isEmpty
                           ? 'Несущий ряд будет построен от центра комнаты '
                               '(можно заранее поставить свой ряд тапом).'
-                          : 'Каркас строится от уже выставленного несущего ряда.',
+                          : _guides.length == 1
+                              ? 'Каркас будет построен от вашей первой направляющей.'
+                              : 'Каркас строится от уже выставленного несущего ряда.',
                       style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                             color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                           ),
@@ -516,12 +857,14 @@ class _LayoutScreenState extends State<LayoutScreen> {
     final room = _room;
     if (room == null) return;
 
+    const cellSize = layoutTileCm;
+
     final seed = findFrameSeed(_guides.values, template: template) ??
         seedFrameAtRoomCenter(
           template: template,
           offsetX: _visualOffsetX,
           offsetY: _visualOffsetY,
-          cellSize: _grid.cellSizeCm,
+          cellSize: cellSize,
           walls: room.walls,
         );
 
@@ -530,20 +873,27 @@ class _LayoutScreenState extends State<LayoutScreen> {
       seed: seed,
       offsetX: _visualOffsetX,
       offsetY: _visualOffsetY,
-      cellSize: _grid.cellSizeCm,
+      cellSize: cellSize,
       walls: room.walls,
       cellSizeLabel: cellSizeLabel,
     );
 
+    _pushUndoSnapshot();
     setState(() {
       _guides
         ..clear()
         ..addEntries(proposed.map((g) => MapEntry(g.storageKey, g)));
+      _grid.cellSizeCm = layoutTileCm;
       room.materialsCeiling = template.materialsLabel;
       if (template.needsCellSize) {
         room.materialsCell = cellSizeLabel;
       }
       room.materialsOverride = true;
+      _mainGuideKind = template.mainGuideKind;
+      if (_guideKind == GuideKind.g3600 || _guideKind == GuideKind.g2400) {
+        _guideKind = template.mainGuideKind;
+      }
+      _rebuildGrid(room);
     });
 
     final projects = AppScope.of(context).projects;
@@ -568,6 +918,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
   String? _hitExistingGuide(Offset world, double tol) {
     final room = _room;
     if (room == null) return null;
+    final cell = _grid.cellSizeCm;
     String? bestKey;
     var bestDist = double.infinity;
     for (final e in _guides.entries) {
@@ -577,34 +928,76 @@ class _LayoutScreenState extends State<LayoutScreen> {
         lineIndex: mark.lineIndex,
         gridOffset: mark.axis == GuideAxis.horizontal ? _grid.offsetYCm : _grid.offsetXCm,
         visualOffset: mark.axis == GuideAxis.horizontal ? _visualOffsetY : _visualOffsetX,
-        cellSize: _grid.cellSizeCm,
+        cellSize: cell,
       );
       final dist = mark.axis == GuideAxis.horizontal
           ? (world.dy - coord).abs()
           : (world.dx - coord).abs();
-      if (dist <= tol && dist < bestDist) {
-        bestDist = dist;
-        bestKey = e.key;
+      if (dist > tol || dist >= bestDist) continue;
+
+      final perpAxis =
+          mark.axis == GuideAxis.horizontal ? GuideAxis.vertical : GuideAxis.horizontal;
+      final anchorCm = guideLineWorldCoord(
+        axis: perpAxis,
+        lineIndex: mark.anchorAlongIndex,
+        gridOffset: perpAxis == GuideAxis.vertical ? _grid.offsetXCm : _grid.offsetYCm,
+        visualOffset:
+            perpAxis == GuideAxis.vertical ? _visualOffsetX : _visualOffsetY,
+        cellSize: cell,
+      );
+      final segs = guideProfilePieceSegments(
+        mark,
+        room.walls,
+        offsetX: _visualOffsetX,
+        offsetY: _visualOffsetY,
+        cellSize: cell,
+        coordCm: coord,
+        anchorAlongCm: anchorCm,
+      );
+      var onRun = segs.isEmpty;
+      for (final s in segs) {
+        if (mark.axis == GuideAxis.horizontal) {
+          final along = world.dx;
+          final lo = math.min(s.x1, s.x2) - tol;
+          final hi = math.max(s.x1, s.x2) + tol;
+          if (along >= lo && along <= hi) {
+            onRun = true;
+            break;
+          }
+        } else {
+          final along = world.dy;
+          final lo = math.min(s.y1, s.y2) - tol;
+          final hi = math.max(s.y1, s.y2) + tol;
+          if (along >= lo && along <= hi) {
+            onRun = true;
+            break;
+          }
+        }
       }
+      if (!onRun) continue;
+      bestDist = dist;
+      bestKey = e.key;
     }
     return bestKey;
   }
 
-  void _onGuideLongPressStart(LongPressStartDetails d, _LayoutMetrics m) {
+  void _onGuideLongPressStart(LongPressStartDetails d, LayoutMetrics m) {
     if (_mode != LayoutMode.guides || _room == null) return;
     final world = m.screenToWorld(d.localPosition);
-    final key = _hitExistingGuide(world, _grid.cellSizeCm * 0.45);
+    final key = _hitExistingGuide(world, _grid.cellSizeCm * 0.55);
     if (key == null) return;
     final mark = _guides.remove(key);
     if (mark == null) return;
+    _pushUndoSnapshot();
     setState(() {
       _floatingGuide = mark;
       _dragSmoothX = world.dx;
       _dragSmoothY = world.dy;
+      _showGuideKindClear = false;
     });
   }
 
-  void _onGuideLongPressMove(LongPressMoveUpdateDetails d, _LayoutMetrics m) {
+  void _onGuideLongPressMove(LongPressMoveUpdateDetails d, LayoutMetrics m) {
     if (_floatingGuide == null || _room == null) return;
     final world = m.screenToWorld(d.localPosition);
     setState(() {
@@ -624,6 +1017,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
     final room = _room!;
     final prev = _floatingGuide!;
     final cell = _grid.cellSizeCm;
+    // Free drop: nearest H or V grid line (↑↓←→), not locked to old axis.
     final placement = snapGuidePlacement(
       worldX: _dragSmoothX ?? 0,
       worldY: _dragSmoothY ?? 0,
@@ -631,7 +1025,6 @@ class _LayoutScreenState extends State<LayoutScreen> {
       offsetY: _visualOffsetY,
       cellSize: cell,
       walls: room.walls,
-      preferAxis: prev.axis,
     );
     final key =
         '${placement.axis == GuideAxis.vertical ? 'v' : 'h'}:${placement.lineIndex}';
@@ -646,6 +1039,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
       _dragSmoothX = null;
       _dragSmoothY = null;
     });
+    _scheduleAutosave();
   }
 
   /// Live guide marks for drawing/counts (includes floating preview at snap).
@@ -661,7 +1055,6 @@ class _LayoutScreenState extends State<LayoutScreen> {
       offsetY: _visualOffsetY,
       cellSize: _grid.cellSizeCm,
       walls: room.walls,
-      preferAxis: floating.axis,
     );
     marks.add(CeilingGuideMark(
       axis: placement.axis,
@@ -702,12 +1095,42 @@ class _LayoutScreenState extends State<LayoutScreen> {
   }
 
   bool get _joystickEnabled =>
-      _mode == LayoutMode.grid ||
       _mode == LayoutMode.pan ||
+      _mode == LayoutMode.grid ||
       _mode == LayoutMode.lights ||
       _mode == LayoutMode.guides;
 
-  void _clearGuides() => setState(_guides.clear);
+  void _clearGuides() {
+    if (_guides.isEmpty) return;
+    _pushUndoSnapshot();
+    setState(() {
+      _guides.clear();
+      _showGuideKindClear = false;
+    });
+    _scheduleAutosave();
+  }
+
+  void _clearGuidesOfKind(GuideKind kind) {
+    final keys = _guides.entries
+        .where((e) => e.value.kind == kind)
+        .map((e) => e.key)
+        .toList();
+    if (keys.isEmpty) {
+      setState(() => _showGuideKindClear = false);
+      return;
+    }
+    _pushUndoSnapshot();
+    setState(() {
+      for (final k in keys) {
+        _guides.remove(k);
+      }
+      _showGuideKindClear = false;
+    });
+    _scheduleAutosave();
+  }
+
+  GuideKind get _mainClearKind =>
+      _mainGuideKind == GuideKind.g2400 ? GuideKind.g2400 : GuideKind.g3600;
 
   void _nudge(double dx, double dy, {bool finalize = false}) {
     final room = _room;
@@ -715,9 +1138,11 @@ class _LayoutScreenState extends State<LayoutScreen> {
     setState(() {
       _visualOffsetX += dx;
       _visualOffsetY += dy;
+      _snapVisualOffsetToCm();
       if (finalize) {
         _liveGridThrottle?.cancel();
         _commitGridOffset(room);
+        _scheduleAutosave();
       } else {
         _scheduleLiveGridSync(room);
       }
@@ -731,7 +1156,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
     return x;
   }
 
-  Rect _visibleWorld(Size paintSize, _LayoutMetrics metrics) {
+  Rect _visibleWorld(Size paintSize, LayoutMetrics metrics) {
     final m = Matrix4.copy(_transform.value);
     final det = m.invert();
     double minSx;
@@ -771,6 +1196,28 @@ class _LayoutScreenState extends State<LayoutScreen> {
     ).inflate(_grid.cellSizeCm);
   }
 
+  Set<String> _designLightIds(Room room) {
+    final fixtures = readDesignLightFixtures(room);
+    if (fixtures == null) return const {};
+    return fixtures
+        .where((f) => f.length >= 2)
+        .map((f) => '${f[0]}:${f[1]}')
+        .toSet();
+  }
+
+  List<CeilingGuideMark> _designGuideGhosts(Room room) {
+    if (!room.layoutConfirmed || !hasDesignCeilingFeaturesBaseline(room)) {
+      return const [];
+    }
+    final base = readDesignBaseline(room);
+    return designGuideMarksNotInFact(
+      room,
+      offsetX: base.offsetX.toDouble(),
+      offsetY: base.offsetY.toDouble(),
+      cellSize: _grid.cellSizeCm,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -785,28 +1232,29 @@ class _LayoutScreenState extends State<LayoutScreen> {
     }
 
     final (ef, ec) = _grid.effectiveTileCounts;
+    final purchase = ceilingPurchaseCount(room);
     final area = MaterialsCalculator.roomAreaM2(room.walls);
     final perimeter = MaterialsCalculator.roomPerimeterCm(room.walls) / 100;
     final guideHint = _guideStatsHint();
     final stats =
-        'Целых: $ef  ·  Резаных: $ec  ·  Свет: ${_grid.lightCount}  ·  '
+        'На плане: $ef целых + $ec резаных  ·  Закупка: $purchase  ·  Свет: ${_grid.lightCount}  ·  '
         'P: ${perimeter.toStringAsFixed(2)} м  ·  '
         'Площадь: ${area.toStringAsFixed(2)} м²  ·  '
         'Смещение: ${_visualOffsetX.round()}×${_visualOffsetY.round()} см'
-        '${_mode == LayoutMode.pan && (room.layoutConfirmed || _shouldDefaultPan(room)) ? '  ·  Панорама (сетка заблокирована)' : ''}'
         '$guideHint';
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        await _leaveLayout();
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(room.name),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            await _persist();
-            if (!mounted) return;
-            // Always return to rooms list (Kivy go_back → rooms).
-            Navigator.of(context).pop();
-          },
+          onPressed: _leaveLayout,
         ),
         actions: [
           IconButton(
@@ -814,11 +1262,19 @@ class _LayoutScreenState extends State<LayoutScreen> {
             onPressed: () {
               setState(() {
                 if (_mode == LayoutMode.pan) {
-                  _viewApplied = false; // re-center on next frame
+                  _forceFitNext = true;
+                  _viewApplied = false;
                 } else {
+                  // Absolute world origin — reset anchor first so ±1-cell clamp
+                  // cannot pull 0,0 back toward the last saved offset.
+                  _anchorOffsetX = 0;
+                  _anchorOffsetY = 0;
                   _visualOffsetX = 0;
                   _visualOffsetY = 0;
-                  _scheduleRebuild(room, immediate: true);
+                  _grid.offsetXCm = 0;
+                  _grid.offsetYCm = 0;
+                  _rebuildGrid(room);
+                  _scheduleAutosave();
                 }
               });
             },
@@ -826,33 +1282,30 @@ class _LayoutScreenState extends State<LayoutScreen> {
           ),
           TextButton(
             onPressed: () async {
-              await _persist();
+              await _persistWithAutoGuides();
               if (!mounted) return;
-              await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => FinishRoomScreen(
-                    projectId: widget.projectId,
-                    roomId: widget.roomId,
-                  ),
-                ),
+              await openRoomModule(
+                context,
+                projectId: widget.projectId,
+                roomId: widget.roomId,
+                module: AppModule.finish,
               );
-              await _load();
             },
             child: const Text('Отделка'),
           ),
           TextButton(
             onPressed: () async {
-              await _persist();
+              await _persistWithAutoGuides();
               if (!mounted) return;
               await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MaterialsResultScreen(
                     projectId: widget.projectId,
                     roomId: widget.roomId,
+                    calcMode: MaterialsCalcMode.ceiling,
                   ),
                 ),
               );
-              await _load();
             },
             child: const Text('Материал'),
           ),
@@ -872,9 +1325,8 @@ class _LayoutScreenState extends State<LayoutScreen> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final viewport = Size(constraints.maxWidth, constraints.maxHeight);
-                  // Larger canvas so InteractiveViewer can pan (child == viewport ⇒ no pan).
                   final canvasSize = Size(viewport.width * 2.2, viewport.height * 2.2);
-                  final metrics = _LayoutMetrics.compute(canvasSize, room.walls);
+                  final metrics = LayoutMetrics.compute(canvasSize, room.walls);
                   _lastMetrics = metrics;
                   final visibleWorld = _visibleWorld(viewport, metrics);
                   if (!_viewApplied) {
@@ -909,6 +1361,14 @@ class _LayoutScreenState extends State<LayoutScreen> {
                         onLongPressEnd: _mode == LayoutMode.guides
                             ? _onGuideLongPressEnd
                             : null,
+                        onPanStart: _mode == LayoutMode.grid
+                            ? (_) {
+                                if (!_gridPanUndoPushed) {
+                                  _pushUndoSnapshot();
+                                  _gridPanUndoPushed = true;
+                                }
+                              }
+                            : null,
                         onPanUpdate: _mode == LayoutMode.grid
                             ? (d) {
                                 final dx = d.delta.dx / metrics.scale;
@@ -916,6 +1376,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
                                 setState(() {
                                   _visualOffsetX += dx;
                                   _visualOffsetY += dy;
+                                  _snapVisualOffsetToCm();
                                   _scheduleLiveGridSync(room);
                                 });
                               }
@@ -923,23 +1384,25 @@ class _LayoutScreenState extends State<LayoutScreen> {
                         onPanEnd: _mode == LayoutMode.grid
                             ? (_) {
                                 _liveGridThrottle?.cancel();
+                                _gridPanUndoPushed = false;
                                 setState(() => _commitGridOffset(room));
                               }
                             : null,
                         onPanCancel: _mode == LayoutMode.grid
                             ? () {
                                 _liveGridThrottle?.cancel();
+                                _gridPanUndoPushed = false;
                                 setState(() => _commitGridOffset(room));
                               }
                             : null,
                         child: CustomPaint(
                           size: canvasSize,
-                          painter: _LayoutPainter(
+                          painter: LayoutPainter(
                             walls: room.walls,
                             grid: _grid,
                             metrics: metrics,
-                            showTileDims: _showTileDims,
-                            showWallDims: _showWallDims,
+                            showTileDims: _layers.tileDims,
+                            showWallDims: _layers.wallDims,
                             visualOffsetX: _visualOffsetX,
                             visualOffsetY: _visualOffsetY,
                             visibleWorld: visibleWorld,
@@ -950,6 +1413,17 @@ class _LayoutScreenState extends State<LayoutScreen> {
                             floatingGuide: _floatingGuide,
                             dragSmoothX: _dragSmoothX,
                             dragSmoothY: _dragSmoothY,
+                            showDesignOverlay: false,
+                            designGridOffsetX: readDesignBaseline(room).offsetX,
+                            designGridOffsetY: readDesignBaseline(room).offsetY,
+                            designLightIds: _designLightIds(room),
+                            designGuideGhosts: _designGuideGhosts(room),
+                            layers: _layers,
+                            notesOverlay: RoomDocumentationChecklist.fromJson(room.documentationChecklistJson).notes,
+                            floorOffsetX: room.floorGridOffsetX.toDouble(),
+                            floorOffsetY: room.floorGridOffsetY.toDouble(),
+                            floorTileWCm: room.finishTileWidthCm,
+                            floorTileHCm: room.finishTileHeightCm,
                           ),
                         ),
                       ),
@@ -963,6 +1437,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
                     top: 8,
                     left: 8,
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Material(
                           color: Colors.black.withValues(alpha: 0.42),
@@ -975,14 +1450,62 @@ class _LayoutScreenState extends State<LayoutScreen> {
                         ),
                         if (_guides.isNotEmpty) ...[
                           const SizedBox(width: 6),
-                          Material(
-                            color: Colors.black.withValues(alpha: 0.42),
-                            borderRadius: BorderRadius.circular(10),
-                            child: IconButton(
-                              tooltip: 'Очистить направляющие',
-                              onPressed: _clearGuides,
-                              icon: const Icon(Icons.cleaning_services, color: Colors.white),
-                            ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Material(
+                                color: Colors.black.withValues(alpha: 0.42),
+                                borderRadius: BorderRadius.circular(10),
+                                child: IconButton(
+                                  tooltip:
+                                      'Очистить все · удерживайте — по типу',
+                                  onPressed: () {
+                                    if (_showGuideKindClear) {
+                                      setState(
+                                        () => _showGuideKindClear = false,
+                                      );
+                                    } else {
+                                      _clearGuides();
+                                    }
+                                  },
+                                  onLongPress: () => setState(
+                                    () => _showGuideKindClear =
+                                        !_showGuideKindClear,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.cleaning_services,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                                alignment: Alignment.centerLeft,
+                                child: _showGuideKindClear
+                                    ? Padding(
+                                        padding: const EdgeInsets.only(left: 6),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            for (final k in <GuideKind>[
+                                              _mainClearKind,
+                                              GuideKind.g1200,
+                                              GuideKind.g600,
+                                            ]) ...[
+                                              _GuideKindClearPill(
+                                                kind: k,
+                                                onTap: () =>
+                                                    _clearGuidesOfKind(k),
+                                              ),
+                                              const SizedBox(width: 6),
+                                            ],
+                                          ],
+                                        ),
+                                      )
+                                    : const SizedBox.shrink(),
+                              ),
+                            ],
                           ),
                         ],
                       ],
@@ -1046,8 +1569,8 @@ class _LayoutScreenState extends State<LayoutScreen> {
                                       : GuideKind.g3600,
                                   selected: _guideKind == GuideKind.g3600 ||
                                       _guideKind == GuideKind.g2400,
-                                  accent3600: _guideKindColor(GuideKind.g3600),
-                                  accent2400: _guideKindColor(GuideKind.g2400),
+                                  accent3600: guideKindColor(GuideKind.g3600),
+                                  accent2400: guideKindColor(GuideKind.g2400),
                                   onChanged: (kind) => setState(() {
                                     _mainGuideKind = kind;
                                     _guideKind = kind;
@@ -1062,7 +1585,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
                                   child: _ModeChip(
                                     label: kind.id,
                                     selected: _guideKind == kind,
-                                    accent: _guideKindColor(kind),
+                                    accent: guideKindColor(kind),
                                     onTap: () => setState(() => _guideKind = kind),
                                   ),
                                 ),
@@ -1091,8 +1614,8 @@ class _LayoutScreenState extends State<LayoutScreen> {
                                 padding: const EdgeInsets.symmetric(vertical: 1),
                                 child: _ModeChip(
                                   label: 'Плиты',
-                                  selected: _showTileDims,
-                                  onTap: () => setState(() => _showTileDims = !_showTileDims),
+                                  selected: _layers.tileDims,
+                                  onTap: () => _setLayerValue((l) => l.copyWith(tileDims: !l.tileDims)),
                                 ),
                               ),
                             ),
@@ -1101,8 +1624,8 @@ class _LayoutScreenState extends State<LayoutScreen> {
                                 padding: const EdgeInsets.symmetric(vertical: 1),
                                 child: _ModeChip(
                                   label: 'Стены',
-                                  selected: _showWallDims,
-                                  onTap: () => setState(() => _showWallDims = !_showWallDims),
+                                  selected: _layers.wallDims,
+                                  onTap: () => _setLayerValue((l) => l.copyWith(wallDims: !l.wallDims)),
                                 ),
                               ),
                             ),
@@ -1147,6 +1670,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }
@@ -1355,406 +1879,49 @@ class _MainGuideSwipeChipState extends State<_MainGuideSwipeChip> {
   }
 }
 
-Color _guideKindColor(GuideKind kind) {
-  switch (kind) {
-    case GuideKind.g3600:
-      return const Color(0xFF1565C0);
-    case GuideKind.g1200:
-      return const Color(0xFF2E7D32);
-    case GuideKind.g600:
-      return const Color(0xFFE65100);
-    case GuideKind.g2400:
-      return const Color(0xFF6A1B9A);
-  }
-}
+/// Compact pill to clear one guide kind (long-press on clear → expand right).
+class _GuideKindClearPill extends StatelessWidget {
+  const _GuideKindClearPill({required this.kind, required this.onTap});
 
-class _LayoutMetrics {
-  _LayoutMetrics({
-    required this.scale,
-    required this.minX,
-    required this.minY,
-    required this.maxY,
-    required this.ox,
-    required this.oy,
-    required this.roomWidthPx,
-    required this.roomHeightPx,
-    required this.centroidWorldX,
-    required this.centroidWorldY,
-    required this.size,
-  });
+  final GuideKind kind;
+  final VoidCallback onTap;
 
-  final double scale;
-  final double minX;
-  final double minY;
-  final double maxY;
-  final double ox;
-  final double oy;
-  final double roomWidthPx;
-  final double roomHeightPx;
-  final double centroidWorldX;
-  final double centroidWorldY;
-  final Size size;
-
-  Offset get roomCentroidScreen => Offset(
-        ox + (centroidWorldX - minX) * scale,
-        oy + (maxY - centroidWorldY) * scale,
-      );
-
-  Offset get roomCenterScreen =>
-      Offset(ox + roomWidthPx / 2, oy + roomHeightPx / 2);
-
-  double fitScaleForViewport(Size viewport) {
-    if (roomWidthPx <= 0 || roomHeightPx <= 0) return 1;
-    return math.min(viewport.width / roomWidthPx, viewport.height / roomHeightPx) *
-        0.9;
-  }
-
-  static _LayoutMetrics compute(Size size, List<List<double>> walls) {
-    double minX = 0, maxX = 100, minY = 0, maxY = 100;
-    if (walls.isNotEmpty) {
-      minX = walls.first[0];
-      maxX = walls.first[0];
-      minY = walls.first[1];
-      maxY = walls.first[1];
-      for (final w in walls) {
-        for (final x in [w[0], w[2]]) {
-          minX = math.min(minX, x);
-          maxX = math.max(maxX, x);
-        }
-        for (final y in [w[1], w[3]]) {
-          minY = math.min(minY, y);
-          maxY = math.max(maxY, y);
-        }
-      }
-    }
-    minX -= 60;
-    maxX += 60;
-    minY -= 60;
-    maxY += 60;
-    final worldW = math.max(1.0, maxX - minX);
-    final worldH = math.max(1.0, maxY - minY);
-    final scale = math.min(size.width / worldW, size.height / worldH) * 0.88;
-    final roomWidthPx = worldW * scale;
-    final roomHeightPx = worldH * scale;
-    final ox = (size.width - roomWidthPx) / 2;
-    final oy = (size.height - roomHeightPx) / 2;
-    final (cx, cy) = roomCentroidCm(walls);
-    return _LayoutMetrics(
-      scale: scale,
-      minX: minX,
-      minY: minY,
-      maxY: maxY,
-      ox: ox,
-      oy: oy,
-      roomWidthPx: roomWidthPx,
-      roomHeightPx: roomHeightPx,
-      centroidWorldX: cx,
-      centroidWorldY: cy,
-      size: size,
+  @override
+  Widget build(BuildContext context) {
+    final color = guideKindColor(kind);
+    return Material(
+      color: Colors.black.withValues(alpha: 0.42),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                kind.id,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
-
-  Offset screenToWorld(Offset p) {
-    final x = minX + (p.dx - ox) / scale;
-    final y = maxY - (p.dy - oy) / scale;
-    return Offset(x, y);
-  }
 }
 
-class _LayoutPainter extends CustomPainter {
-  _LayoutPainter({
-    required this.walls,
-    required this.grid,
-    required this.metrics,
-    required this.showTileDims,
-    required this.showWallDims,
-    required this.visualOffsetX,
-    required this.visualOffsetY,
-    required this.visibleWorld,
-    required this.lightIds,
-    required this.guides,
-    required this.wallsForGuides,
-    required this.showGuides,
-    this.floatingGuide,
-    this.dragSmoothX,
-    this.dragSmoothY,
-  });
-
-  final List<List<double>> walls;
-  final CeilingGrid grid;
-  final _LayoutMetrics metrics;
-  final bool showTileDims;
-  final bool showWallDims;
-  final double visualOffsetX;
-  final double visualOffsetY;
-  final Rect visibleWorld;
-  final Set<String> lightIds;
-  final Map<String, CeilingGuideMark> guides;
-  final List<List<double>> wallsForGuides;
-  final bool showGuides;
-  final CeilingGuideMark? floatingGuide;
-  final double? dragSmoothX;
-  final double? dragSmoothY;
-
-  void _drawGuideCaps(Canvas canvas, Offset a, Offset b, Color color, double stroke) {
-    final capR = math.max(stroke * 2.1, 5.5);
-    final capPaint = Paint()..color = color;
-    final rim = Paint()
-      ..color = Colors.white.withValues(alpha: 0.55)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    canvas.drawCircle(a, capR, capPaint);
-    canvas.drawCircle(b, capR, capPaint);
-    canvas.drawCircle(a, capR, rim);
-    canvas.drawCircle(b, capR, rim);
-  }
-
-  void _drawGuideRun(
-    Canvas canvas, {
-    required GuideDrawSegment seg,
-    required Color color,
-    required double stroke,
-    required bool withCaps,
-    Offset shadowOffset = Offset.zero,
-  }) {
-    final a = _map(seg.x1, seg.y1) + shadowOffset;
-    final b = _map(seg.x2, seg.y2) + shadowOffset;
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = stroke
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(a, b, paint);
-    if (withCaps) _drawGuideCaps(canvas, a, b, color, stroke);
-  }
-
-  static Color _guideColor(GuideKind kind) => _guideKindColor(kind);
-
-  Offset _map(double x, double y) {
-    final px = metrics.ox + (x - metrics.minX) * metrics.scale;
-    final py = metrics.oy + (metrics.maxY - y) * metrics.scale;
-    return Offset(px, py);
-  }
-
-  /// World origin of cell — shifts live with [visualOffset] before grid rebuild.
-  (double, double) _cellOrigin(GridCell c) {
-    final dx = visualOffsetX - grid.offsetXCm;
-    final dy = visualOffsetY - grid.offsetYCm;
-    return (c.xCm + dx, c.yCm + dy);
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = CanvasPalette.bg);
-
-    final wallPaint = Paint()
-      ..color = CanvasPalette.wall
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
-    final fullPaint = Paint()..color = CanvasPalette.fullTile;
-    final cutPaint = Paint()..color = CanvasPalette.cutTile;
-    final linePaint = Paint()
-      ..color = CanvasPalette.grid
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-    final lightPaint = Paint()..color = const Color.fromRGBO(255, 245, 184, 0.85);
-    final cell = grid.cellSizeCm;
-    final view = visibleWorld;
-    final borderPath = Path();
-
-    // Draw only non-outside tiles (Kivy parity) — no viewport-wide grid.
-    for (final c in grid.cells) {
-      final (x, y) = _cellOrigin(c);
-      if (x + cell < view.left ||
-          x > view.right ||
-          y + cell < view.top ||
-          y > view.bottom) {
-        continue;
-      }
-      final a = _map(x, y);
-      final b = _map(x + cell, y + cell);
-      final r = Rect.fromPoints(a, b);
-      final lit = lightIds.contains(c.id);
-      canvas.drawRect(
-        r,
-        lit ? lightPaint : (c.kind == CellKind.full ? fullPaint : cutPaint),
-      );
-      borderPath.addRect(r);
-
-      if (showTileDims && c.kind == CellKind.cut) {
-        const threshold = 59.95;
-        if (c.cutXCm < threshold || c.cutYCm < threshold) {
-          final label = '${c.cutXCm.round()}×${c.cutYCm.round()}';
-          final fontSize = (9 * (metrics.scale / 2).clamp(0.55, 1.6)).clamp(8.0, 16.0);
-          final tp = TextPainter(
-            text: TextSpan(
-              text: label,
-              style: TextStyle(
-                color: CanvasPalette.text,
-                fontSize: fontSize,
-                fontWeight: FontWeight.w600,
-                shadows: const [
-                  Shadow(blurRadius: 3, color: Colors.black87),
-                  Shadow(blurRadius: 1, color: Colors.black),
-                ],
-              ),
-            ),
-            textDirection: TextDirection.ltr,
-          )..layout();
-          final origin = r.center - Offset(tp.width / 2, tp.height / 2);
-          final chip = RRect.fromRectAndRadius(
-            Rect.fromLTWH(origin.dx - 3, origin.dy - 2, tp.width + 6, tp.height + 4),
-            const Radius.circular(3),
-          );
-          canvas.drawRRect(chip, Paint()..color = const Color(0xAA000000));
-          tp.paint(canvas, origin);
-        }
-      }
-    }
-    canvas.drawPath(borderPath, linePaint);
-
-    if (showGuides) {
-      _paintGuides(canvas, view, cell);
-    }
-
-    for (final w in walls) {
-      final a = _map(w[0], w[1]);
-      final b = _map(w[2], w[3]);
-      canvas.drawLine(a, b, wallPaint);
-      if (showWallDims) {
-        final len = math.sqrt(math.pow(w[2] - w[0], 2) + math.pow(w[3] - w[1], 2));
-        final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
-        final tp = TextPainter(
-          text: TextSpan(
-            text: len.toStringAsFixed(0),
-            style: TextStyle(
-              color: CanvasPalette.wall,
-              fontSize: 10 * (metrics.scale / 2).clamp(0.7, 1.4),
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, mid - Offset(tp.width / 2, tp.height + 2));
-      }
-    }
-  }
-
-  void _paintGuides(Canvas canvas, Rect view, double cell) {
-    final cellSize = grid.cellSizeCm;
-    for (final e in guides.entries) {
-      final mark = e.value;
-      final coord = guideLineWorldCoord(
-        axis: mark.axis,
-        lineIndex: mark.lineIndex,
-        gridOffset: mark.axis == GuideAxis.horizontal ? grid.offsetYCm : grid.offsetXCm,
-        visualOffset: mark.axis == GuideAxis.horizontal ? visualOffsetY : visualOffsetX,
-        cellSize: cellSize,
-      );
-      final perpAxis =
-          mark.axis == GuideAxis.horizontal ? GuideAxis.vertical : GuideAxis.horizontal;
-      final anchorCm = guideLineWorldCoord(
-        axis: perpAxis,
-        lineIndex: mark.anchorAlongIndex,
-        gridOffset: perpAxis == GuideAxis.vertical ? grid.offsetXCm : grid.offsetYCm,
-        visualOffset: perpAxis == GuideAxis.vertical ? visualOffsetX : visualOffsetY,
-        cellSize: cellSize,
-      );
-      final segments = guideProfilePieceSegments(
-        mark,
-        wallsForGuides,
-        offsetX: visualOffsetX,
-        offsetY: visualOffsetY,
-        cellSize: cellSize,
-        coordCm: coord,
-        anchorAlongCm: anchorCm,
-      );
-      final color = _guideColor(mark.kind);
-      final stroke = mark.kind == GuideKind.g3600 ? 4.0 : 2.8;
-      for (final seg in segments) {
-        final midX = (seg.x1 + seg.x2) * 0.5;
-        final midY = (seg.y1 + seg.y2) * 0.5;
-        if (midX < view.left - cell || midX > view.right + cell) continue;
-        if (midY < view.top - cell || midY > view.bottom + cell) continue;
-        _drawGuideRun(
-          canvas,
-          seg: seg,
-          color: color.withValues(alpha: 0.92),
-          stroke: stroke,
-          withCaps: true,
-        );
-      }
-    }
-
-    if (floatingGuide != null && dragSmoothX != null && dragSmoothY != null) {
-      final mark = floatingGuide!;
-      final axis = mark.axis;
-      final coord = axis == GuideAxis.horizontal ? dragSmoothY! : dragSmoothX!;
-      final along = axis == GuideAxis.horizontal ? dragSmoothX! : dragSmoothY!;
-      final preview = CeilingGuideMark(
-        axis: axis,
-        lineIndex: 0,
-        kind: mark.kind,
-        anchorAlongIndex: 0,
-      );
-      final segments = guideProfilePieceSegments(
-        preview,
-        wallsForGuides,
-        offsetX: visualOffsetX,
-        offsetY: visualOffsetY,
-        cellSize: cellSize,
-        coordCm: coord,
-        anchorAlongCm: along,
-      );
-      final color = _guideColor(mark.kind);
-      const floatStroke = 5.5;
-      for (final seg in segments) {
-        final midX = (seg.x1 + seg.x2) * 0.5;
-        final midY = (seg.y1 + seg.y2) * 0.5;
-        if (midX < view.left - cell || midX > view.right + cell) continue;
-        if (midY < view.top - cell || midY > view.bottom + cell) continue;
-        _drawGuideRun(
-          canvas,
-          seg: seg,
-          color: Colors.black.withValues(alpha: 0.22),
-          stroke: floatStroke + 1.5,
-          withCaps: false,
-          shadowOffset: const Offset(1.5, 2.5),
-        );
-        _drawGuideRun(
-          canvas,
-          seg: seg,
-          color: color.withValues(alpha: 0.95),
-          stroke: floatStroke,
-          withCaps: true,
-        );
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _LayoutPainter old) {
-    return old.walls != walls ||
-        old.grid.cells != grid.cells ||
-        old.grid.offsetXCm != grid.offsetXCm ||
-        old.grid.offsetYCm != grid.offsetYCm ||
-        old.grid.cellSizeCm != grid.cellSizeCm ||
-        old.metrics.scale != metrics.scale ||
-        old.metrics.minX != metrics.minX ||
-        old.metrics.minY != metrics.minY ||
-        old.metrics.size != metrics.size ||
-        old.showTileDims != showTileDims ||
-        old.showWallDims != showWallDims ||
-        old.visualOffsetX != visualOffsetX ||
-        old.visualOffsetY != visualOffsetY ||
-        old.visibleWorld != visibleWorld ||
-        old.lightIds.length != lightIds.length ||
-        !old.lightIds.containsAll(lightIds) ||
-        old.guides.length != guides.length ||
-        !mapEquals(old.guides, guides) ||
-        old.wallsForGuides != wallsForGuides ||
-        old.showGuides != showGuides ||
-        old.floatingGuide != floatingGuide ||
-        old.dragSmoothX != dragSmoothX ||
-        old.dragSmoothY != dragSmoothY;
-  }
-}

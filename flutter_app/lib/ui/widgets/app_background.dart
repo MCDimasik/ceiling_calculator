@@ -1,11 +1,134 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app_scope.dart';
 import '../../domain/theme_controller.dart';
+
+/// Pre-blurs background photos once (memory + disk) and reuses across screens.
+///
+/// Avoids live [ImageFiltered] in the widget tree (Material ink crashes on
+/// Windows). One decode+blur per asset/level; survives app restarts via PNG cache.
+class BgBlurCache {
+  BgBlurCache._();
+
+  static final Map<String, ui.Image> _images = {};
+  static final Map<String, Future<ui.Image>> _inflight = {};
+
+  /// Finish screens use 0.5 — warm this at startup to avoid sharp→blur flash.
+  static const commonBlurAmount = 0.5;
+
+  static String _key(String asset, double blurAmount) {
+    final bucket = (blurAmount.clamp(0.0, 1.0) * 10).round(); // 0..10
+    return '$asset#$bucket';
+  }
+
+  static double _sigmaFor(double blurAmount) =>
+      blurAmount.clamp(0.0, 1.0) * 24.0; // 0.5 → sigma 12
+
+  static String _diskName(String key) =>
+      'bg_blur_${key.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_')}.png';
+
+  static ui.Image? peek(String asset, double blurAmount) =>
+      _images[_key(asset, blurAmount)];
+
+  static Future<ui.Image> obtain(String asset, double blurAmount) {
+    final key = _key(asset, blurAmount);
+    final hit = _images[key];
+    if (hit != null) return Future.value(hit);
+    return _inflight.putIfAbsent(key, () async {
+      final fromDisk = await _loadDisk(key);
+      if (fromDisk != null) {
+        _images[key] = fromDisk;
+        _inflight.remove(key);
+        return fromDisk;
+      }
+      final image = await _render(asset, _sigmaFor(blurAmount));
+      _images[key] = image;
+      unawaited(_saveDisk(key, image));
+      _inflight.remove(key);
+      return image;
+    });
+  }
+
+  /// Warm memory (+ disk) for typical finish-screen blur levels.
+  static Future<void> warm(Iterable<String> assets, {double blurAmount = commonBlurAmount}) async {
+    for (final asset in assets) {
+      try {
+        await obtain(asset, blurAmount);
+      } catch (e, st) {
+        debugPrint('BgBlurCache.warm failed for $asset: $e\n$st');
+      }
+    }
+  }
+
+  static Future<ui.Image?> _loadDisk(String key) async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final file = File(p.join(dir.path, _diskName(key)));
+      if (!await file.exists()) return null;
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return null;
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } catch (e) {
+      debugPrint('BgBlurCache disk load: $e');
+      return null;
+    }
+  }
+
+  static Future<void> _saveDisk(String key, ui.Image image) async {
+    try {
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) return;
+      final dir = await getApplicationSupportDirectory();
+      final file = File(p.join(dir.path, _diskName(key)));
+      await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    } catch (e) {
+      debugPrint('BgBlurCache disk save: $e');
+    }
+  }
+
+  static Future<ui.Image> _render(String asset, double sigma) async {
+    final data = await rootBundle.load(asset);
+    final codec = await ui.instantiateImageCodec(
+      data.buffer.asUint8List(),
+      targetWidth: 960,
+    );
+    final frame = await codec.getNextFrame();
+    final src = frame.image;
+    final w = src.width;
+    final h = src.height;
+    final rect = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.saveLayer(
+      rect,
+      Paint()
+        ..imageFilter = ui.ImageFilter.blur(
+          sigmaX: sigma,
+          sigmaY: sigma,
+          tileMode: TileMode.clamp,
+        ),
+    );
+    canvas.drawImage(src, Offset.zero, Paint());
+    canvas.restore();
+    final picture = recorder.endRecording();
+    final out = await picture.toImage(w, h);
+    src.dispose();
+    picture.dispose();
+    return out;
+  }
+}
 
 /// Full-bleed photo background; optional muted looping video (home only).
 ///
@@ -18,6 +141,10 @@ class AppBackground extends StatefulWidget {
     required this.child,
     this.dim = false,
     this.allowVideo = false,
+    /// 0…1 soft background blur (pre-rendered + cached, not live ImageFiltered).
+    this.blurAmount = 0,
+    /// Dim overlay opacity when [dim] is true (default slightly darker).
+    this.dimOpacity = 0.45,
   });
 
   final Widget child;
@@ -25,6 +152,9 @@ class AppBackground extends StatefulWidget {
 
   /// When false, always show photo (list screens). Enable only on home.
   final bool allowVideo;
+
+  final double blurAmount;
+  final double dimOpacity;
 
   @override
   State<AppBackground> createState() => _AppBackgroundState();
@@ -38,6 +168,10 @@ class _AppBackgroundState extends State<AppBackground> {
   bool _syncing = false;
   bool? _lastWantVideo;
 
+  ui.Image? _blurred;
+  String? _blurRequestKey;
+  int _blurGen = 0;
+
   bool _wantVideo(ThemeController theme) {
     if (!widget.allowVideo) return false;
     if (!theme.useVideoBg) return false;
@@ -48,7 +182,9 @@ class _AppBackgroundState extends State<AppBackground> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _syncBlurFromCache();
     _scheduleSync();
+    _scheduleBlur();
   }
 
   @override
@@ -57,12 +193,77 @@ class _AppBackgroundState extends State<AppBackground> {
     if (oldWidget.allowVideo != widget.allowVideo) {
       _scheduleSync();
     }
+    if (oldWidget.blurAmount != widget.blurAmount) {
+      _syncBlurFromCache();
+      _scheduleBlur();
+    }
+  }
+
+  /// Instant: use warm memory cache so first frame is already blurred.
+  void _syncBlurFromCache() {
+    final frost = widget.blurAmount.clamp(0.0, 1.0);
+    if (frost < 0.01) {
+      _blurred = null;
+      _blurRequestKey = null;
+      return;
+    }
+    final asset = AppScope.of(context).theme.bgImageAsset;
+    final key = '$asset#${(frost * 10).round()}';
+    final cached = BgBlurCache.peek(asset, frost);
+    if (cached != null) {
+      _blurred = cached;
+      _blurRequestKey = key;
+    }
   }
 
   void _scheduleSync() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncVideo();
     });
+  }
+
+  void _scheduleBlur() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ensureBlurred();
+    });
+  }
+
+  Future<void> _ensureBlurred() async {
+    if (!mounted) return;
+    final frost = widget.blurAmount.clamp(0.0, 1.0);
+    if (frost < 0.01) {
+      if (_blurred != null || _blurRequestKey != null) {
+        setState(() {
+          _blurred = null;
+          _blurRequestKey = null;
+        });
+      }
+      return;
+    }
+
+    final asset = AppScope.of(context).theme.bgImageAsset;
+    final key = '$asset#${(frost * 10).round()}';
+    final cached = BgBlurCache.peek(asset, frost);
+    if (cached != null) {
+      if (!identical(_blurred, cached) || _blurRequestKey != key) {
+        setState(() {
+          _blurred = cached;
+          _blurRequestKey = key;
+        });
+      }
+      return;
+    }
+    if (_blurRequestKey == key && _blurred != null) return;
+
+    final gen = ++_blurGen;
+    _blurRequestKey = key;
+    try {
+      final image = await BgBlurCache.obtain(asset, frost);
+      if (!mounted || gen != _blurGen) return;
+      setState(() => _blurred = image);
+    } catch (e, st) {
+      debugPrint('AppBackground: blur cache failed, sharp photo. $e\n$st');
+    }
   }
 
   Future<void> _syncVideo() async {
@@ -137,10 +338,42 @@ class _AppBackgroundState extends State<AppBackground> {
 
   @override
   void dispose() {
+    _blurGen++;
     final v = _video;
     _video = null;
     v?.dispose();
     super.dispose();
+  }
+
+  Widget _buildPhoto(ThemeController theme, Color fallback) {
+    final frost = widget.blurAmount.clamp(0.0, 1.0);
+    final blurred = _blurred ??
+        (frost >= 0.01
+            ? BgBlurCache.peek(theme.bgImageAsset, frost)
+            : null);
+    if (frost >= 0.01 && blurred != null) {
+      return FittedBox(
+        fit: BoxFit.cover,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: blurred.width.toDouble(),
+          height: blurred.height.toDouble(),
+          child: RawImage(
+            image: blurred,
+            fit: BoxFit.fill,
+            filterQuality: FilterQuality.low,
+          ),
+        ),
+      );
+    }
+    return Image.asset(
+      theme.bgImageAsset,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.low,
+      cacheWidth: 1280,
+      errorBuilder: (_, __, ___) => ColoredBox(color: fallback),
+    );
   }
 
   @override
@@ -154,20 +387,17 @@ class _AppBackgroundState extends State<AppBackground> {
             (want && _loadedVideoAsset != theme.bgVideoAsset && !_syncing)) {
           _scheduleSync();
         }
+        _scheduleBlur();
+
+        final frost = widget.blurAmount.clamp(0.0, 1.0);
         return Stack(
           fit: StackFit.expand,
           children: [
-            Image.asset(
-              theme.bgImageAsset,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.low,
-              // Downscale decode — full-res bg was a major open-screen hitch.
-              cacheWidth: 1280,
-              errorBuilder: (_, __, ___) => ColoredBox(
-                color: Theme.of(context).colorScheme.surface,
+            _buildPhoto(theme, Theme.of(context).colorScheme.surface),
+            if (frost >= 0.01)
+              ColoredBox(
+                color: Colors.black.withValues(alpha: 0.10 + frost * 0.12),
               ),
-            ),
             if (want && _videoReady && _video != null)
               FittedBox(
                 fit: BoxFit.cover,
@@ -178,7 +408,11 @@ class _AppBackgroundState extends State<AppBackground> {
                 ),
               ),
             if (widget.dim)
-              ColoredBox(color: Colors.black.withValues(alpha: 0.35)),
+              ColoredBox(
+                color: Colors.black.withValues(
+                  alpha: widget.dimOpacity.clamp(0.0, 0.85),
+                ),
+              ),
             widget.child,
           ],
         );

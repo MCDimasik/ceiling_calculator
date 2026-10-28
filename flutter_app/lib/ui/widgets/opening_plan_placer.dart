@@ -3,56 +3,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../domain/finish_model.dart';
+import '../../domain/wall_geometry.dart';
 
-/// Cheap 2D hit: nearest wall segment + offset along it (cm).
-class WallHit {
-  const WallHit({
-    required this.wallIndex,
-    required this.offsetAlongCm,
-    required this.distanceCm,
-    required this.wallLengthCm,
-  });
-
-  final int wallIndex;
-  final double offsetAlongCm;
-  final double distanceCm;
-  final double wallLengthCm;
-}
-
-WallHit? nearestWallHit(
-  List<List<double>> walls,
-  double x,
-  double y, {
-  double maxDistCm = 45,
-}) {
-  WallHit? best;
-  for (var i = 0; i < walls.length; i++) {
-    final w = walls[i];
-    final ax = w[0], ay = w[1], bx = w[2], by = w[3];
-    final abx = bx - ax, aby = by - ay;
-    final len2 = abx * abx + aby * aby;
-    if (len2 < 1e-6) continue;
-    final len = math.sqrt(len2);
-    var t = ((x - ax) * abx + (y - ay) * aby) / len2;
-    t = t.clamp(0.0, 1.0);
-    final px = ax + abx * t;
-    final py = ay + aby * t;
-    final d = math.sqrt((x - px) * (x - px) + (y - py) * (y - py));
-    if (d > maxDistCm) continue;
-    if (best == null || d < best.distanceCm) {
-      best = WallHit(
-        wallIndex: i,
-        offsetAlongCm: t * len,
-        distanceCm: d,
-        wallLengthCm: len,
-      );
-    }
-  }
-  return best;
-}
-
-/// Top-down plan: tap/drag a wall to place the selected opening. O(walls) per gesture.
-class OpeningPlanPlacer extends StatelessWidget {
+/// Top-down plan: tap/drag a wall to place the selected opening.
+class OpeningPlanPlacer extends StatefulWidget {
   const OpeningPlanPlacer({
     super.key,
     required this.walls,
@@ -65,34 +19,44 @@ class OpeningPlanPlacer extends StatelessWidget {
   final List<List<double>> walls;
   final List<RoomOpening> openings;
 
-  /// Which opening type is being placed; null = view-only.
+  /// Which opening is being placed/moved; null = view-only (tap to select).
   final int? placingIndex;
 
-  /// Called when user places/moves the active opening on a wall.
   /// [offsetAlongCm] is the **start** of the opening (left edge along wall).
   final void Function(int wallIndex, double offsetAlongCm)? onPlace;
 
   final ValueChanged<int>? onSelectOpening;
 
   @override
+  State<OpeningPlanPlacer> createState() => _OpeningPlanPlacerState();
+}
+
+class _OpeningPlanPlacerState extends State<OpeningPlanPlacer> {
+  bool _dragActive = false;
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
-        final metrics = _PlanMetrics.compute(size, walls);
+        final metrics = _PlanMetrics.compute(size, widget.walls);
         return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: (d) => _handle(d.localPosition, metrics, tap: true),
-          onPanUpdate: placingIndex == null
-              ? null
-              : (d) => _handle(d.localPosition, metrics, tap: false),
+          // translucent: empty plan areas let the parent ListView scroll.
+          behavior: HitTestBehavior.translucent,
+          onTapUp: (d) => _onTap(d.localPosition, metrics),
+          onPanStart: (d) => _onPanStart(d.localPosition, metrics),
+          onPanUpdate: _dragActive
+              ? (d) => _onPanUpdate(d.localPosition, metrics)
+              : null,
+          onPanEnd: (_) => _dragActive = false,
+          onPanCancel: () => _dragActive = false,
           child: CustomPaint(
             size: size,
             painter: _PlanPainter(
-              walls: walls,
-              openings: openings,
+              walls: widget.walls,
+              openings: widget.openings,
               metrics: metrics,
-              placingIndex: placingIndex,
+              placingIndex: widget.placingIndex,
             ),
           ),
         );
@@ -100,30 +64,56 @@ class OpeningPlanPlacer extends StatelessWidget {
     );
   }
 
-  void _handle(Offset local, _PlanMetrics m, {required bool tap}) {
+  void _onTap(Offset local, _PlanMetrics m) {
     final world = m.screenToWorld(local);
-    // Prefer selecting an existing mark when not dragging.
-    if (tap && placingIndex == null && onSelectOpening != null) {
-      final idx = _hitOpeningMark(world, m);
-      if (idx != null) {
-        onSelectOpening!(idx);
-        return;
-      }
+    final hitOpening = _hitOpeningMark(world);
+    if (hitOpening != null && widget.onSelectOpening != null) {
+      widget.onSelectOpening!(hitOpening);
+      return;
     }
-    if (placingIndex == null || onPlace == null) return;
-    final hit = nearestWallHit(walls, world.dx, world.dy);
-    if (hit == null) return;
-    final o = openings[placingIndex!];
-    // Center opening on tap when possible.
-    var start = hit.offsetAlongCm - o.widthCm / 2;
-    start = start.clamp(0.0, math.max(0.0, hit.wallLengthCm - o.widthCm));
-    onPlace!(hit.wallIndex, start);
+    if (widget.placingIndex == null || widget.onPlace == null) return;
+    _placeAt(world);
   }
 
-  int? _hitOpeningMark(Offset world, _PlanMetrics m) {
+  void _onPanStart(Offset local, _PlanMetrics m) {
+    _dragActive = false;
+    if (widget.placingIndex == null || widget.onPlace == null) return;
+    final world = m.screenToWorld(local);
+    final hitOpening = _hitOpeningMark(world);
+    // Start drag only on the selected opening or near a wall (placement).
+    if (hitOpening == widget.placingIndex) {
+      _dragActive = true;
+      _placeAt(world);
+      return;
+    }
+    final wall = nearestWallHit(widget.walls, world.dx, world.dy);
+    if (wall != null && wall.distanceCm <= 35) {
+      _dragActive = true;
+      _placeAt(world);
+    }
+  }
+
+  void _onPanUpdate(Offset local, _PlanMetrics m) {
+    if (!_dragActive || widget.onPlace == null) return;
+    _placeAt(m.screenToWorld(local));
+  }
+
+  void _placeAt(Offset world) {
+    final hit = nearestWallHit(widget.walls, world.dx, world.dy);
+    if (hit == null) return;
+    final o = widget.openings[widget.placingIndex!];
+    var start = hit.offsetAlongCm - o.widthCm / 2;
+    start = start.clamp(0.0, math.max(0.0, hit.wallLengthCm - o.widthCm));
+    widget.onPlace!(hit.wallIndex, start);
+  }
+
+  int? _hitOpeningMark(Offset world) {
     const gap = 30.0;
     var bestI = -1;
-    var bestD = 25.0; // cm
+    // Generous hit target in plan cm — easier than thin stroke.
+    var bestD = 45.0;
+    final openings = widget.openings;
+    final walls = widget.walls;
     for (var i = 0; i < openings.length; i++) {
       final o = openings[i];
       final wi = o.wallIndex;
@@ -134,6 +124,7 @@ class OpeningPlanPlacer extends StatelessWidget {
       if (len < 1) continue;
       final ux = (bx - ax) / len;
       final uy = (by - ay) / len;
+      // Each opening is one mark (quantity always 1 after expand).
       final n = math.max(1, o.quantity);
       for (var q = 0; q < n; q++) {
         final t0 = o.offsetAlongWallCm + q * (o.widthCm + gap);
@@ -141,7 +132,8 @@ class OpeningPlanPlacer extends StatelessWidget {
         final mid = t0 + o.widthCm / 2;
         final mx = ax + ux * mid;
         final my = ay + uy * mid;
-        final d = math.sqrt(math.pow(world.dx - mx, 2) + math.pow(world.dy - my, 2));
+        final d =
+            math.sqrt(math.pow(world.dx - mx, 2) + math.pow(world.dy - my, 2));
         if (d < bestD) {
           bestD = d;
           bestI = i;
@@ -294,7 +286,7 @@ class _PlanPainter extends CustomPainter {
         ..color = o.kind == 'door'
             ? (selected ? const Color(0xFFE07A5F) : const Color(0xFFC96A52))
             : (selected ? const Color(0xFF81B29A) : const Color(0xFF6A9B84))
-        ..strokeWidth = selected ? 8 : 6
+        ..strokeWidth = selected ? 10 : 7
         ..strokeCap = StrokeCap.butt
         ..style = PaintingStyle.stroke;
 
@@ -312,7 +304,7 @@ class _PlanPainter extends CustomPainter {
     if (placingIndex != null) {
       final tip = TextPainter(
         text: const TextSpan(
-          text: 'Коснитесь стены · тяните вдоль неё',
+          text: 'Тяните проём или коснитесь стены',
           style: TextStyle(color: Colors.white70, fontSize: 11),
         ),
         textDirection: TextDirection.ltr,

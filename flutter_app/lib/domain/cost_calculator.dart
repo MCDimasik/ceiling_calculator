@@ -12,6 +12,7 @@ class SupplierPrice {
     this.unitPriceClient = 0,
     this.receiptUnit = 'piece',
     this.unitsPerPack = 1,
+    this.supplierSku = '',
   });
 
   final String itemKey;
@@ -20,6 +21,7 @@ class SupplierPrice {
   double unitPriceClient;
   String receiptUnit;
   double unitsPerPack;
+  String supplierSku;
 
   String get calcMatchKey =>
       catalogByItemKey(itemKey)?.calcMatchKey ?? productName;

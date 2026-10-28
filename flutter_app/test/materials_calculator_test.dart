@@ -98,4 +98,31 @@ void main() {
     expect(adjusted['Подвес'], 30);
     expect(adjusted['Соединитель'], 10);
   });
+
+  test('marks with only 1200/600 drop formula 3600', () {
+    final raw = MaterialsCalculator.calcArmstrong(walls4x3, 34);
+    expect(raw['Направляющая 3600']!, greaterThan(0));
+    final adjusted = applyGuideOverrides(
+      raw,
+      {'Направляющая 1200': 5, 'Направляющая 600': 8},
+      type: CeilingType.armstrong,
+    );
+    expect(adjusted.containsKey('Направляющая 3600'), isFalse);
+    expect(adjusted['Направляющая 1200'], 5);
+    expect(adjusted['Направляющая 600'], 8);
+    expect(adjusted['Подвес'], 10); // 1200 as mains × 2
+  });
+
+  test('marks with only 1200/600 drop formula 3600 for GL', () {
+    final raw = MaterialsCalculator.calcGrilyatoGl(walls4x3, 34, '100x100');
+    expect(raw['Направляющая 3600']!, greaterThan(0));
+    final adjusted = applyGuideOverrides(
+      raw,
+      {'Направляющая 1200': 3, 'Направляющая 600': 6},
+      type: CeilingType.grilyatoGl,
+    );
+    expect(adjusted.containsKey('Направляющая 3600'), isFalse);
+    expect(adjusted['Направляющая 1200'], 3);
+    expect(adjusted['Подвес'], 6); // 1200 × 2
+  });
 }

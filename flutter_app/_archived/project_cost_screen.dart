@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'widgets/screen_scaffold.dart';
+
 import '../app_scope.dart';
 import '../domain/cost_calculator.dart';
+import '../domain/documentation_model.dart';
 import '../domain/models.dart';
+import '../domain/money_format.dart';
+import '../domain/primary_supplier.dart';
 
 class ProjectCostScreen extends StatefulWidget {
   const ProjectCostScreen({super.key, required this.projectId});
@@ -26,13 +31,6 @@ class _ProjectCostScreenState extends State<ProjectCostScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!AppScope.of(context).admin.unlocked) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Только для администратора')),
-        );
-        return;
-      }
       _load();
     });
   }
@@ -41,11 +39,12 @@ class _ProjectCostScreenState extends State<ProjectCostScreen> {
     final scope = AppScope.of(context);
     final project = await scope.projects.getProject(widget.projectId);
     final suppliers = await scope.suppliers.listSuppliers();
+    final doc = ProjectDocumentation.fromJson(project?.documentationJson);
     if (!mounted) return;
     setState(() {
       _project = project;
       _suppliers = suppliers;
-      _supplierId = suppliers.isNotEmpty ? suppliers.first.id : null;
+      _supplierId = resolvePrimarySupplierId(doc, suppliers);
       _loading = false;
     });
     await _recalc();
@@ -66,15 +65,12 @@ class _ProjectCostScreenState extends State<ProjectCostScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!AppScope.of(context).admin.unlocked) {
-      return const SizedBox.shrink();
-    }
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const ScreenScaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final r = _result;
-    return Scaffold(
+    return ScreenScaffold(
       appBar: AppBar(
         title: GestureDetector(
           onLongPress: () => setState(() => _showBenefit = !_showBenefit),
@@ -124,23 +120,23 @@ class _ProjectCostScreenState extends State<ProjectCostScreen> {
                       : 'нет цены · ${line.qty} шт',
                 ),
                 trailing: Text(
-                  line.lineTotal != null ? line.lineTotal!.toStringAsFixed(2) : '—',
+                  line.lineTotal != null ? formatMoney(line.lineTotal!, fractionDigits: 2) : '—',
                 ),
               ),
             const Divider(),
             ListTile(
               title: const Text('Итого'),
               trailing: Text(
-                r.total.toStringAsFixed(2),
+                formatMoney(r.total, fractionDigits: 2),
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
               ),
             ),
             if (_showBenefit && r.benefit != null)
               ListTile(
                 title: const Text('Выгода'),
-                subtitle: Text('Закуп ${r.totalCost.toStringAsFixed(2)}'),
+                subtitle: Text('Закуп ${formatMoney(r.totalCost, fractionDigits: 2)}'),
                 trailing: Text(
-                  r.benefit!.toStringAsFixed(2),
+                  formatMoney(r.benefit!, fractionDigits: 2),
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.primary,
                     fontWeight: FontWeight.w600,

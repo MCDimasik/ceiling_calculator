@@ -4,12 +4,13 @@ import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const prefAdminUnlocked = 'admin_unlocked';
-const _adminPasswordPlain = 'Gfhjkm-lkz-flvbyf';
+
+/// Precomputed SHA-256 of the admin passphrase (plain text not stored in source).
+const _adminPasswordHash =
+    'e24a1e873d6e7a23e83030ba8f8bbf06d867d9fe854111cb67eb8a61c7897613';
 
 String _hash(String password) =>
     sha256.convert(utf8.encode(password.trim())).toString();
-
-final _adminPasswordHash = _hash(_adminPasswordPlain);
 
 /// Admin unlock (parity with Python `app_access.py`).
 class AdminAccess {

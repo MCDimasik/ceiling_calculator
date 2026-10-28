@@ -1,0 +1,78 @@
+// ARCHIVED snippets from finish_room_screen.dart / room_editor / hub
+// Restore with domain: finish_design_baseline.dart, design_walls_baseline.dart,
+// wall_polygon_diff.dart, layout_design_baseline.dart, design_ceiling_features_baseline.dart
+
+// --- Overview card (finish) ---
+/*
+if (hasDesignWallBaseline(room)) ...[
+  Card(
+    color: Theme.of(context).colorScheme.secondaryContainer,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.compare_arrows),
+            title: const Text('Проект vs факт'),
+            subtitle: Text(formatFinishBaselineStatus(room)),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 4,
+              children: [
+                if (readBaselineHistory(room).isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _showBaselineHistory(room),
+                    icon: const Icon(Icons.history, size: 18),
+                    label: Text('История (${readBaselineHistory(room).length})'),
+                  ),
+                TextButton.icon(
+                  onPressed: AppScope.of(context).fieldRole.role.canRebaseline
+                      ? () => _confirmRebaseline(room)
+                      : null,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Обновить проектную базу'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+  const SizedBox(height: 12),
+],
+*/
+
+// --- Walls / floor cards + floor ghost overlay + tab alerts ---
+/*
+if (_hasWallDelta(room)) ...[ Card(... 'Проект vs факт · контур' ...); ]
+if (showFloorGhost && _showFloorGhost) ...[ Card(... 'Проект vs факт · пол' ... Switch ...); ]
+// FloorPlanPainter stack + FloorLayoutGhostPainter when showFloorGhost
+tabs: [
+  _finishTab('Стены', alert: _hasWallDelta(room)),
+  _finishTab('Пол', alert: _hasFloorDelta(room)),
+  _finishTab('Потолок', alert: _hasCeilingDelta(room)),
+]
+*/
+
+// --- Methods removed from FinishRoomScreen ---
+/*
+Future<void> _confirmRebaseline(Room room) async { ... rebaselineFinishDesign(room); ... }
+Future<void> _showBaselineHistory(Room room) async { ... readBaselineHistory ... }
+bool _hasFloorDelta / _hasCeilingDelta / _hasWallDelta
+*/
+
+// --- Room editor ---
+/*
+AppBar: IconButton toggle _showDesignOverlay «Проект vs факт»
+info string: Δ area vs проект
+painter designWalls: _showDesignOverlay ? readDesignWalls(_room!) : null
+*/
+
+// --- Hub (documentation) ---
+/*
+if (hasFinishDesignBaseline(room)) Card status «Проект vs факт» with deltas
+*/

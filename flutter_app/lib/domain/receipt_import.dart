@@ -7,6 +7,7 @@ import 'cost_calculator.dart';
 import 'material_catalog.dart';
 import 'product_aliases.dart';
 import 'receipt_templates.dart';
+import 'user_product_aliases.dart';
 
 class ParsedReceiptItem {
   ParsedReceiptItem({
@@ -50,6 +51,11 @@ double? _parsePriceToken(String s) {
   final m = RegExp(r'(\d+(?:\.\d{1,2})?)').firstMatch(cleaned);
   if (m == null) return null;
   return double.tryParse(m.group(1)!);
+}
+
+String _extractSku(String raw) {
+  final m = RegExp(r'\b(\d{5,7})\b').firstMatch(raw);
+  return m?.group(1) ?? '';
 }
 
 ParsedReceipt parseReceiptText(String text) {
@@ -131,7 +137,11 @@ Future<(ParsedReceipt parsed, Map<String, dynamic>? meta)> parseReceiptTextSmart
   return (parseReceiptText(text), null);
 }
 
-AliasHit? matchReceiptRow(ParsedReceiptItem item) {
+AliasHit? matchReceiptRow(
+  ParsedReceiptItem item, {
+  UserProductAliasStore? userAliases,
+  Iterable<SupplierPrice> existing = const [],
+}) {
   if (item.itemKey != null) {
     return AliasHit(
       itemKey: item.itemKey!,
@@ -140,6 +150,23 @@ AliasHit? matchReceiptRow(ParsedReceiptItem item) {
       productName: catalogByItemKey(item.itemKey!)?.displayName,
     );
   }
+  final userHit = userAliases?.match(item.rawName);
+  if (userHit != null) return userHit;
+
+  final want = normalizeProductLabel(item.rawName);
+  if (want.isNotEmpty) {
+    for (final p in existing) {
+      if (normalizeProductLabel(p.productName) == want) {
+        return AliasHit(
+          itemKey: p.itemKey,
+          productName: p.productName,
+          receiptUnit: p.receiptUnit,
+          unitsPerPack: p.unitsPerPack,
+        );
+      }
+    }
+  }
+
   return matchProductAlias(item.rawName);
 }
 
@@ -151,15 +178,28 @@ Future<ReceiptApplyResult> applyParsedReceipt(
   final supplier = await repo.getOrCreateSupplier(parsed.supplierName);
   final existing = await repo.listPrices(supplier.id!);
   final byKey = {for (final p in existing) p.itemKey: p};
+  final userAliases = await UserProductAliasStore.load();
 
   final matched = <Map<String, dynamic>>[];
   final unmatched = <ParsedReceiptItem>[];
+  final pendingAliasLabels = <String, String>{}; // label → itemKey
 
   for (final row in parsed.items) {
-    final alias = matchReceiptRow(row);
+    var alias = matchReceiptRow(
+      row,
+      userAliases: userAliases,
+      existing: existing,
+    );
+    // Still unknown → keep as custom row so user can merge duplicates later.
     if (alias == null) {
+      final customKey = customItemKeyForLabel(row.rawName);
+      alias = AliasHit(
+        itemKey: customKey,
+        productName: row.rawName.trim(),
+        receiptUnit: 'piece',
+        unitsPerPack: 1,
+      );
       unmatched.add(row);
-      continue;
     }
     final entry = catalogByItemKey(alias.itemKey);
     final ru = alias.receiptUnit ?? row.receiptUnit ?? defaultReceiptUnit(alias.itemKey);
@@ -170,25 +210,33 @@ Future<ReceiptApplyResult> applyParsedReceipt(
         ? row.unitPrice
         : receiptPriceToPiece(row.unitPriceReceipt ?? row.unitPrice, ru, upp);
     final client = cost > 0 ? double.parse((cost * 1.1).toStringAsFixed(2)) : 0.0;
+    final prev = byKey[alias.itemKey];
     final price = SupplierPrice(
       itemKey: alias.itemKey,
-      productName: alias.productName ?? entry?.displayName ?? row.rawName,
+      productName: (merge && prev != null && prev.productName.trim().isNotEmpty)
+          ? prev.productName
+          : (alias.productName ?? entry?.displayName ?? row.rawName),
       unitPriceCost: cost,
       unitPriceClient: client,
       receiptUnit: 'piece',
       unitsPerPack: upp,
+      supplierSku: _extractSku(row.rawName),
     );
-    if (merge && byKey.containsKey(alias.itemKey) && price.productName.isEmpty) {
-      price.productName = byKey[alias.itemKey]!.productName;
-    }
     await repo.upsertPrice(supplier.id!, price);
+    byKey[alias.itemKey] = price;
+    pendingAliasLabels[row.rawName] = alias.itemKey;
+    pendingAliasLabels[price.productName] = alias.itemKey;
     matched.add({
       'raw_name': row.rawName,
       'item_key': alias.itemKey,
-      'catalog_name': entry?.displayName ?? alias.itemKey,
+      'catalog_name': entry?.displayName ?? price.productName,
       'unit_price_cost': cost,
       'unit_price_client': client,
     });
+  }
+
+  for (final e in pendingAliasLabels.entries) {
+    await userAliases.bindLabels([e.key], e.value);
   }
 
   return ReceiptApplyResult(

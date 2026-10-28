@@ -232,20 +232,43 @@ class HoldRepeatButton extends StatefulWidget {
 class _HoldRepeatButtonState extends State<HoldRepeatButton> {
   Timer? _timer;
   bool _pressed = false;
+  int _holdTicks = 0;
+
+  /// Speeds up while held: 100ms → 55ms → 32ms.
+  Duration _intervalForHoldTick(int n) {
+    if (n < 6) return const Duration(milliseconds: 100);
+    if (n < 18) return const Duration(milliseconds: 55);
+    return const Duration(milliseconds: 32);
+  }
+
+  void _scheduleNext() {
+    _timer?.cancel();
+    _timer = Timer(_intervalForHoldTick(_holdTicks), () {
+      if (!_pressed) return;
+      _holdTicks++;
+      widget.onTick();
+      _scheduleNext();
+    });
+  }
 
   void _start() {
     setState(() => _pressed = true);
+    _holdTicks = 0;
     widget.onTick();
     _timer?.cancel();
-    _timer = Timer(const Duration(milliseconds: 300), () {
-      _timer?.cancel();
-      _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => widget.onTick());
+    // Initial delay before repeat, then accelerating ticks.
+    _timer = Timer(const Duration(milliseconds: 280), () {
+      if (!_pressed) return;
+      _holdTicks = 1;
+      widget.onTick();
+      _scheduleNext();
     });
   }
 
   void _stop() {
     _timer?.cancel();
     _timer = null;
+    _holdTicks = 0;
     if (_pressed) setState(() => _pressed = false);
     widget.onRelease?.call();
   }

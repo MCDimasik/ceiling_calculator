@@ -4,9 +4,10 @@ import 'app.dart';
 import 'data/app_database.dart';
 import 'data/project_repository.dart';
 import 'data/supplier_repository.dart';
-import 'domain/admin_access.dart';
 import 'domain/legacy_migration.dart';
 import 'domain/theme_controller.dart';
+import 'domain/work_rates_catalog.dart';
+import 'ui/widgets/app_background.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,16 +15,21 @@ Future<void> main() async {
   final db = await openAppDatabase();
   final projects = ProjectRepository(db);
   final suppliers = SupplierRepository(db);
-  final admin = AdminAccess();
   final theme = ThemeController();
-  await Future.wait([admin.load(), theme.load()]);
+  await theme.load();
   await bootstrapSuppliers(suppliers);
+  // Warm work-rates catalog for KS-2 price fallback / pickers.
+  await WorkRatesCatalogStore.ensureLoaded();
   // Warm project list so first «Проекты» open is from memory.
   await projects.warmCaches();
+  // Pre-blur light+dark backgrounds once (memory + disk) — no flash on finish screens.
+  await BgBlurCache.warm(const [
+    'assets/media/bg_light.png',
+    'assets/media/bg_dark.png',
+  ]);
   runApp(CeilingCalculatorApp(
     projects: projects,
     suppliers: suppliers,
-    admin: admin,
     theme: theme,
   ));
 }

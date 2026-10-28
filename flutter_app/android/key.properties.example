@@ -1,5 +1,7 @@
-# Copy to key.properties and fill in for release signing.
-# storePassword=...
-# keyPassword=...
-# keyAlias=upload
-# storeFile=upload-keystore.jks
+# Copy to key.properties (gitignored).
+# For update over Kivy/Buildozer debug APK use the Buildozer machine's
+# ~/.android/debug.keystore (SHA256 must match the installed APK).
+storePassword=android
+keyPassword=android
+keyAlias=androiddebugkey
+storeFile=debug.keystore

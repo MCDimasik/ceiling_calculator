@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import 'widgets/screen_scaffold.dart';
+
 import '../app_scope.dart';
 import '../domain/cost_calculator.dart';
+import 'mount_kits_screen.dart';
 import 'receipt_import_screen.dart';
 import 'supplier_edit_screen.dart';
 import 'widgets/numeric_input.dart';
@@ -22,13 +25,6 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!AppScope.of(context).admin.unlocked) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Только для администратора')),
-        );
-        return;
-      }
       _reload();
     });
   }
@@ -71,18 +67,24 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!AppScope.of(context).admin.unlocked) {
-      return const SizedBox.shrink();
-    }
-    return Scaffold(
+    return ScreenScaffold(
       appBar: AppBar(
         title: const Text('Поставщики'),
         actions: [
           TextButton(
             onPressed: () {
               Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const MountKitsScreen()),
+              );
+            },
+            child: const Text('Комплекты'),
+          ),
+          TextButton(
+            onPressed: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const ReceiptImportScreen()),
               );
+              await _reload();
             },
             child: const Text('Импорт чека'),
           ),
@@ -130,6 +132,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                               builder: (_) => SupplierEditScreen(supplierId: s.id!, name: s.name),
                             ),
                           );
+                          await _reload();
                         },
                       ),
                     );

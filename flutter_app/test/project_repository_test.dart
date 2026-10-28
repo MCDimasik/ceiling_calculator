@@ -70,6 +70,54 @@ void main() {
     expect(after!.rooms, isEmpty);
   });
 
+  test('duplicate room copies geometry without checklist', () async {
+    final project = await repo.createProject('Этаж 2');
+    final source = await repo.createRoom(project.id!, 'Офис 201');
+    source.walls = [
+      [0, 0, 500, 0],
+      [500, 0, 500, 400],
+      [500, 400, 0, 400],
+      [0, 400, 0, 0],
+    ];
+    source.layoutConfirmed = true;
+    source.documentationChecklistJson = {'accepted': true};
+    source.wallFinishLayers = [
+      {'kind': 'plaster', 'enabled': true},
+    ];
+    await repo.updateRoom(source);
+
+    final copy = await repo.duplicateRoom(project.id!, source, 'Офис 202');
+    expect(copy.id, isNot(source.id));
+    expect(copy.name, 'Офис 202');
+    expect(copy.walls.length, 4);
+    expect(copy.layoutConfirmed, isTrue);
+    expect(copy.wallFinishLayers.length, 1);
+    expect(copy.documentationChecklistJson, isNull);
+
+    final loaded = await repo.getProject(project.id!);
+    expect(loaded!.rooms.length, 2);
+  });
+
+  test('duplicate room bulk creates many rooms', () async {
+    final project = await repo.createProject('Этаж 3');
+    final source = await repo.createRoom(project.id!, 'Типовая');
+    source.walls = [
+      [0, 0, 300, 0],
+      [300, 0, 300, 300],
+      [300, 300, 0, 300],
+      [0, 300, 0, 0],
+    ];
+    await repo.updateRoom(source);
+    final copies = await repo.duplicateRoomBulk(
+      project.id!,
+      source,
+      ['Офис 1', 'Офис 2', 'Офис 3'],
+    );
+    expect(copies.length, 3);
+    final loaded = await repo.getProject(project.id!);
+    expect(loaded!.rooms.length, 4);
+  });
+
   test('delete project removes rooms', () async {
     final project = await repo.createProject('Временный');
     await repo.createRoom(project.id!, 'R1');

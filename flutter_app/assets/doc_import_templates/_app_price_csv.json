@@ -1,0 +1,14 @@
+{
+  "id": "app_price_csv",
+  "name": "Прайс приложения (CSV/Excel)",
+  "detect": {
+    "all_contains": ["match_key", "цена"],
+    "min_score": 4
+  },
+  "columns": {
+    "key": ["match_key", "key", "ключ"],
+    "name": ["наименование", "name"],
+    "unit": ["ед", "unit"],
+    "price": ["цена", "price"]
+  }
+}

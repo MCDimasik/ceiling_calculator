@@ -2,11 +2,14 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'finish_material_links.dart';
+
 /// App entry modules that share the same projects/rooms.
 enum AppModule {
   ceilingLayout,
   materials,
   finish,
+  documentation,
 }
 
 extension AppModuleX on AppModule {
@@ -14,19 +17,21 @@ extension AppModuleX on AppModule {
         AppModule.ceilingLayout => 'Расчет раскладки потолка',
         AppModule.materials => 'Расчет материалов',
         AppModule.finish => 'Расчет отделки',
+        AppModule.documentation => 'Документация · отделка',
       };
 
   String get projectsTitle => switch (this) {
         AppModule.ceilingLayout => 'Проекты · раскладка',
         AppModule.materials => 'Проекты · материалы',
         AppModule.finish => 'Проекты · отделка',
+        AppModule.documentation => 'Проекты · документация отделки',
       };
 }
 
 /// Window / door opening subtracted from wall area.
 ///
-/// One row = one **type** (size + optional placement). [quantity] multiplies
-/// the area; several rows = several different types (e.g. two door sizes).
+/// Prefer one row per physical opening (quantity = 1) so each can be moved
+/// independently on the plan. Legacy rows with quantity>1 are expanded on load.
 class RoomOpening {
   RoomOpening({
     required this.kind,
@@ -61,6 +66,22 @@ class RoomOpening {
 
   double get unitAreaM2 => (widthCm * heightCm) / 10000.0;
   double get areaM2 => unitAreaM2 * math.max(1, quantity);
+
+  /// Area subtracted from walls — caps [quantity] when opening is placed on a wall.
+  double effectiveAreaM2(List<List<double>> walls) {
+    if (wallIndex == null) return areaM2;
+    if (wallIndex! < 0 || wallIndex! >= walls.length || widthCm <= 0) return 0;
+    final w = walls[wallIndex!];
+    final wallLen = math.sqrt(
+      math.pow(w[2] - w[0], 2) + math.pow(w[3] - w[1], 2),
+    );
+    final maxFit = wallLen > offsetAlongWallCm
+        ? ((wallLen - offsetAlongWallCm) / widthCm).floor()
+        : 0;
+    final qty = math.min(quantity, math.max(0, maxFit));
+    if (qty <= 0) return 0;
+    return unitAreaM2 * qty;
+  }
 
   String get displayName {
     final base = kind == 'door' ? 'Дверь' : (kind == 'window' ? 'Окно' : kind);
@@ -146,7 +167,7 @@ extension FinishLayerKindX on FinishLayerKind {
         FinishLayerKind.putty => 'Шпаклевка',
         FinishLayerKind.primer => 'Грунтовка',
         FinishLayerKind.paint => 'Краска',
-        FinishLayerKind.tile => 'Плитка',
+        FinishLayerKind.tile => 'Плитка настенная',
       };
 
   static FinishLayerKind? tryParse(String? raw) {
@@ -168,7 +189,12 @@ class FinishLayer {
     this.tileOffsetX = 0,
     this.tileOffsetY = 0,
     this.enabled = true,
-  });
+    this.unitPrice,
+    this.rateMatchKey,
+    this.rateName,
+    this.priceGroupId,
+    List<FinishMaterialLink>? materialLinks,
+  }) : materialLinks = materialLinks ?? [];
 
   FinishLayerKind kind;
 
@@ -180,6 +206,17 @@ class FinishLayer {
   int tileOffsetX;
   int tileOffsetY;
   bool enabled;
+
+  /// Work rate ₽/м² for this layer (optional; feeds КП/КС).
+  double? unitPrice;
+  String? rateMatchKey;
+  String? rateName;
+
+  /// Layers with the same [priceGroupId] share one price (one «итерация»).
+  String? priceGroupId;
+
+  /// Optional materials for this layer (purchase lines in ведомость).
+  List<FinishMaterialLink> materialLinks;
 
   int get coats => kind == FinishLayerKind.paint
       ? paintCoats.clamp(1, 3)
@@ -203,6 +240,14 @@ class FinishLayer {
         'tile_offset_x': tileOffsetX,
         'tile_offset_y': tileOffsetY,
         'enabled': enabled,
+        if (unitPrice != null) 'unit_price': unitPrice,
+        if (rateMatchKey != null && rateMatchKey!.isNotEmpty)
+          'rate_match_key': rateMatchKey,
+        if (rateName != null && rateName!.isNotEmpty) 'rate_name': rateName,
+        if (priceGroupId != null && priceGroupId!.isNotEmpty)
+          'price_group_id': priceGroupId,
+        if (materialLinks.isNotEmpty)
+          'materials': encodeMaterialLinks(materialLinks),
       };
 
   static FinishLayer fromJson(Map<String, dynamic> j) {
@@ -216,8 +261,34 @@ class FinishLayer {
       tileOffsetX: (j['tile_offset_x'] as num?)?.toInt() ?? 0,
       tileOffsetY: (j['tile_offset_y'] as num?)?.toInt() ?? 0,
       enabled: j['enabled'] as bool? ?? true,
+      unitPrice: (j['unit_price'] as num?)?.toDouble(),
+      rateMatchKey: j['rate_match_key'] as String?,
+      rateName: j['rate_name'] as String?,
+      priceGroupId: j['price_group_id'] as String?,
+      materialLinks: decodeMaterialLinks(j['materials']),
     );
   }
+}
+
+/// Sum of enabled layer unit prices (₽/м² of surface work).
+/// Layers with the same [FinishLayer.priceGroupId] count once (одна итерация).
+double? sumLayerUnitPrices(Iterable<FinishLayer> layers) {
+  final seenGroups = <String>{};
+  var sum = 0.0;
+  var any = false;
+  for (final l in layers) {
+    if (!l.enabled) continue;
+    final p = l.unitPrice;
+    if (p == null || p <= 0) continue;
+    final g = l.priceGroupId;
+    if (g != null && g.isNotEmpty) {
+      if (seenGroups.contains(g)) continue;
+      seenGroups.add(g);
+    }
+    sum += p;
+    any = true;
+  }
+  return any ? sum : null;
 }
 
 /// Quantities for one wall finish layer against net wall area.
@@ -310,13 +381,15 @@ class FinishCalculator {
   static List<FinishLayerQty> layerQuantities({
     required double wallsNetM2,
     required List<FinishLayer> layers,
+    int? wallTileLayoutCount,
   }) {
     final out = <FinishLayerQty>[];
     for (final layer in layers) {
       if (!layer.enabled) continue;
       final area = wallsNetM2 * layer.coats;
       final tiles = layer.kind == FinishLayerKind.tile
-          ? tilesForArea(wallsNetM2, layer.tileWidthCm, layer.tileHeightCm)
+          ? (wallTileLayoutCount ??
+              tilesForArea(wallsNetM2, layer.tileWidthCm, layer.tileHeightCm))
           : 0;
       out.add(FinishLayerQty(layer: layer, areaM2: area, tilesEstimate: tiles));
     }
@@ -329,23 +402,42 @@ class FinishCalculator {
     required List<RoomOpening> openings,
     double tileWidthCm = 60,
     double tileHeightCm = 60,
+    double ceilingCellCm = 60,
+    int? floorLayoutBoardCount,
+    int? wallLayoutTileCount,
+    int? ceilingLayoutTileCount,
     List<FinishLayer> wallLayers = const [],
   }) {
     final floor = floorAreaM2(walls);
     final peri = perimeterM(walls);
     final gross = peri * (heightCm / 100.0);
-    final open = openings.fold<double>(0, (a, o) => a + o.areaM2);
+    final open = openings.fold<double>(
+      0,
+      (a, o) => a + o.effectiveAreaM2(walls),
+    );
     final net = math.max(0.0, gross - open);
-    final layerQtys = layerQuantities(wallsNetM2: net, layers: wallLayers);
-    FinishLayer? tileLayer;
-    for (final l in wallLayers) {
-      if (l.enabled && l.kind == FinishLayerKind.tile) {
-        tileLayer = l;
-        break;
-      }
-    }
-    final wallTileW = tileLayer?.tileWidthCm ?? tileWidthCm;
-    final wallTileH = tileLayer?.tileHeightCm ?? tileHeightCm;
+    final layerQtys = layerQuantities(
+      wallsNetM2: net,
+      layers: wallLayers,
+      wallTileLayoutCount: wallLayoutTileCount,
+    );
+    final floorTilesCount = floorLayoutBoardCount ??
+        tilesForArea(floor, tileWidthCm, tileHeightCm);
+    final ceilingTilesCount = ceilingLayoutTileCount ??
+        tilesForArea(floor, ceilingCellCm, ceilingCellCm);
+    final wallTilesCount = wallLayoutTileCount ??
+        (() {
+          FinishLayer? tileLayer;
+          for (final l in wallLayers) {
+            if (l.enabled && l.kind == FinishLayerKind.tile) {
+              tileLayer = l;
+              break;
+            }
+          }
+          final wallTileW = tileLayer?.tileWidthCm ?? tileWidthCm;
+          final wallTileH = tileLayer?.tileHeightCm ?? tileHeightCm;
+          return tilesForArea(net, wallTileW, wallTileH);
+        })();
     return FinishAreas(
       floorM2: floor,
       ceilingM2: floor,
@@ -353,9 +445,9 @@ class FinishCalculator {
       openingsM2: open,
       wallsNetM2: net,
       perimeterM: peri,
-      floorTiles: tilesForArea(floor, tileWidthCm, tileHeightCm),
-      ceilingTiles: tilesForArea(floor, 60, 60),
-      wallTiles: tilesForArea(net, wallTileW, wallTileH),
+      floorTiles: floorTilesCount,
+      ceilingTiles: ceilingTilesCount,
+      wallTiles: wallTilesCount,
       wallLayers: layerQtys,
     );
   }

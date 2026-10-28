@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import '../app_scope.dart';
 import '../domain/finish_model.dart';
 import '../domain/project_transfer.dart';
+import 'documentation_flow_screens.dart';
 import 'materials_flow_screens.dart';
+import 'pricing_hub_screen.dart';
 import 'projects_screen.dart';
 import 'settings_screen.dart';
-import 'suppliers_screen.dart';
 import 'widgets/app_background.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -17,36 +18,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  Future<void> _adminDialog() async {
-    final controller = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Режим администратора\n(цены и поставщики)'),
-        content: TextField(
-          controller: controller,
-          obscureText: true,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Пароль'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Войти')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final unlocked = await AppScope.of(context).admin.tryUnlock(controller.text);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(unlocked ? 'Админ-режим включён' : 'Неверный пароль')),
-    );
-    setState(() {});
-  }
-
   @override
   Widget build(BuildContext context) {
-    final admin = AppScope.of(context).admin.unlocked;
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: AppBackground(
@@ -81,9 +54,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               _MainButton(
-                label: 'Расчет материалов',
+                label: 'Расчет материалов потолка',
                 onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const MaterialsProjectsScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => const ProjectsScreen(
+                      materialsCalcMode: MaterialsCalcMode.ceiling,
+                    ),
+                  ),
                 ),
               ),
               _MainButton(
@@ -95,37 +72,48 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               _MainButton(
+                label: 'Документация · отделка',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DocumentationProjectsScreen(),
+                  ),
+                ),
+              ),
+              _MainButton(
                 label: 'Импорт проекта',
                 onTap: () async {
                   try {
                     final p = await importProjectFile(AppScope.of(context).projects);
                     if (!mounted) return;
                     if (p == null) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        p.rooms.isEmpty
-                            ? 'Импортирован «${p.name}»'
-                            : 'Импортирован «${p.name}» · комнат: ${p.rooms.length}',
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          p.rooms.isEmpty
+                              ? 'Импортирован «${p.name}»'
+                              : 'Импортирован «${p.name}» · комнат: ${p.rooms.length}',
+                        ),
                       ),
-                    ),
-                  );
+                    );
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Ошибка: $e')),
+                    );
                   }
                 },
               ),
-              if (admin)
-                _MainButton(
-                  label: 'Поставщики',
-                  onTap: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SuppliersScreen()),
-                    );
-                    if (mounted) setState(() {});
-                  },
-                ),
+              _MainButton(
+                label: 'Расценки',
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const PricingHubScreen(),
+                    ),
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
               Material(
                 color: Theme.of(context).colorScheme.secondaryContainer,
                 borderRadius: BorderRadius.circular(12),
@@ -138,7 +126,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (mounted) setState(() {});
                     });
                   },
-                  onLongPress: _adminDialog,
                   child: const SizedBox(
                     height: 54,
                     width: double.infinity,

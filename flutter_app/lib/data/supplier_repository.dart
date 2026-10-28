@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../domain/cost_calculator.dart';
 import '../domain/material_catalog.dart';
+import '../domain/user_product_aliases.dart';
 
 class SupplierRepository {
   SupplierRepository(this._db);
@@ -58,6 +59,7 @@ class SupplierRepository {
 
   Future<List<SupplierPrice>> listPrices(int supplierId) async {
     await _ensureDefaultPrices(supplierId);
+    final hidden = await loadHiddenItemKeys(supplierId);
     final rows = await _db.query(
       'supplier_prices',
       where: 'supplier_id = ?',
@@ -72,8 +74,96 @@ class SupplierRepository {
               unitPriceClient: (r['unit_price_client'] as num?)?.toDouble() ?? 0,
               receiptUnit: r['receipt_unit'] as String? ?? 'piece',
               unitsPerPack: (r['units_per_pack'] as num?)?.toDouble() ?? 1,
+              supplierSku: r['supplier_sku'] as String? ?? '',
             ))
+        .where((p) => !hidden.contains(p.itemKey))
         .toList();
+  }
+
+  /// Keep [keeper], absorb prices from [absorb], hide absorbed keys, bind aliases.
+  Future<SupplierPrice> mergePrices({
+    required int supplierId,
+    required String keeperItemKey,
+    required List<String> absorbItemKeys,
+    required String displayName,
+    required Iterable<String> aliasLabels,
+  }) async {
+    final all = await listPrices(supplierId);
+    // listPrices hides already-hidden; load raw for merge sources.
+    final rows = await _db.query(
+      'supplier_prices',
+      where: 'supplier_id = ?',
+      whereArgs: [supplierId],
+    );
+    SupplierPrice? keeper;
+    final absorb = <SupplierPrice>[];
+    for (final r in rows) {
+      final p = SupplierPrice(
+        itemKey: r['item_key'] as String,
+        productName: r['product_name'] as String,
+        unitPriceCost: (r['unit_price_cost'] as num?)?.toDouble() ?? 0,
+        unitPriceClient: (r['unit_price_client'] as num?)?.toDouble() ?? 0,
+        receiptUnit: r['receipt_unit'] as String? ?? 'piece',
+        unitsPerPack: (r['units_per_pack'] as num?)?.toDouble() ?? 1,
+        supplierSku: r['supplier_sku'] as String? ?? '',
+      );
+      if (p.itemKey == keeperItemKey) keeper = p;
+      if (absorbItemKeys.contains(p.itemKey)) absorb.add(p);
+    }
+    if (keeper == null) {
+      for (final p in all) {
+        if (p.itemKey == keeperItemKey) {
+          keeper = p;
+          break;
+        }
+      }
+    }
+    if (keeper == null) {
+      throw StateError('Не найдена позиция $keeperItemKey');
+    }
+
+    var cost = keeper.unitPriceCost;
+    var client = keeper.unitPriceClient;
+    var upp = keeper.unitsPerPack;
+    var sku = keeper.supplierSku;
+    var receiptUnit = keeper.receiptUnit;
+    for (final p in absorb) {
+      if (p.itemKey == keeperItemKey) continue;
+      if (cost <= 0 && p.unitPriceCost > 0) cost = p.unitPriceCost;
+      if (client <= 0 && p.unitPriceClient > 0) client = p.unitPriceClient;
+      if (upp <= 1 && p.unitsPerPack > 1) upp = p.unitsPerPack;
+      if (sku.isEmpty && p.supplierSku.isNotEmpty) sku = p.supplierSku;
+      if (receiptUnit == 'piece' && p.receiptUnit == 'pack') {
+        receiptUnit = p.receiptUnit;
+      }
+    }
+
+    final merged = SupplierPrice(
+      itemKey: keeperItemKey,
+      productName: displayName.trim().isEmpty ? keeper.productName : displayName.trim(),
+      unitPriceCost: cost,
+      unitPriceClient: client,
+      receiptUnit: receiptUnit,
+      unitsPerPack: upp,
+      supplierSku: sku,
+    );
+    await upsertPrice(supplierId, merged);
+
+    final labels = <String>{
+      ...aliasLabels,
+      merged.productName,
+      for (final p in absorb) p.productName,
+      for (final p in absorb) p.itemKey,
+    };
+    final aliases = await UserProductAliasStore.load();
+    await aliases.bindLabels(labels, keeperItemKey);
+
+    final toHide = absorbItemKeys.where((k) => k != keeperItemKey).toList();
+    for (final k in toHide) {
+      await deletePrice(supplierId, k);
+    }
+    await hideItemKeys(supplierId, toHide);
+    return merged;
   }
 
   Future<void> upsertPrice(int supplierId, SupplierPrice price) async {
@@ -88,6 +178,7 @@ class SupplierRepository {
         'unit_price_client': price.unitPriceClient,
         'receipt_unit': price.receiptUnit,
         'units_per_pack': price.unitsPerPack,
+        'supplier_sku': price.supplierSku,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

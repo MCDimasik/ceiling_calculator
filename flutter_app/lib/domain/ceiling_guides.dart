@@ -646,9 +646,12 @@ int snapGuideLineIndex({
   return (lineIndex: edge.lineIndex, anchorIndex: anchorIndex, axis: edge.axis);
 }
 
-/// Profile pieces from [anchor] both ways, clipped to room walls (wall→wall fill).
+/// Profile pieces for purchase/draw: stock lengths along each run, **phased to
+/// the grid** so joints stay on the 60 cm module across separate bays of an
+/// irregular room (not restarted from each wall stub).
 ///
-/// Phase follows the grid intersection; short end pieces at walls still count.
+/// [anchorAlongCm] (or grid offset along the run) sets the phase origin.
+/// Example: span 425 cm of 3600 with anchor 0 → cuts at 360, remnant 65.
 List<GuideDrawSegment> guideProfilePieceSegments(
   CeilingGuideMark mark,
   List<List<double>> walls, {
@@ -670,17 +673,22 @@ List<GuideDrawSegment> guideProfilePieceSegments(
         offsetY: offsetY,
         cellSize: cellSize,
       );
-  final anchor = anchorAlongCm ??
-      mark.anchorWorldCoord(
-        offsetX: offsetX,
-        offsetY: offsetY,
-        cellSize: cellSize,
-      );
+
+  // Guides coinciding with room walls are perimeter angle, not carriers.
+  final spanAxis = mark.axis;
+  final (minB, maxB) = _roomSpan(spanAxis, walls);
+  if ((coord - minB).abs() <= 1.0 || (coord - maxB).abs() <= 1.0) {
+    return const [];
+  }
 
   final runs = mark.axis == GuideAxis.horizontal
       ? roomHorizontalSegments(polygon, coord)
       : roomVerticalSegments(polygon, coord);
   if (runs.isEmpty) return const [];
+
+  // Phase joints to the global grid along the run (same in every bay).
+  final phaseOrigin = anchorAlongCm ??
+      (mark.axis == GuideAxis.horizontal ? offsetX : offsetY);
 
   const eps = 1e-6;
   final out = <GuideDrawSegment>[];
@@ -690,32 +698,34 @@ List<GuideDrawSegment> guideProfilePieceSegments(
     final runEnd = run.$2;
     if (runEnd <= runStart + eps) continue;
 
-    // Integer k: piece [anchor + k·L, anchor + (k+1)·L] overlaps the wall run.
-    var k = ((runStart - guideLen - anchor) / guideLen).ceil();
-    for (;; k++) {
-      final start = anchor + k * guideLen;
-      if (start >= runEnd - eps) break;
-      final end = start + guideLen;
-      if (end <= runStart + eps) continue;
+    // Split points: run ends + every stock boundary on the global phase.
+    final cuts = <double>[runStart, runEnd];
+    final firstCut =
+        phaseOrigin + ((runStart - phaseOrigin) / guideLen).ceil() * guideLen;
+    for (var t = firstCut; t < runEnd - eps; t += guideLen) {
+      if (t > runStart + eps && t < runEnd - eps) cuts.add(t);
+    }
+    cuts.sort();
 
-      final c1 = math.max(start, runStart);
-      final c2 = math.min(end, runEnd);
-      if (c2 <= c1 + eps) continue;
+    for (var i = 0; i < cuts.length - 1; i++) {
+      final pos = cuts[i];
+      final end = cuts[i + 1];
+      if (end <= pos + eps) continue;
 
       if (mark.axis == GuideAxis.horizontal) {
         out.add(GuideDrawSegment(
-          x1: c1,
+          x1: pos,
           y1: coord,
-          x2: c2,
+          x2: end,
           y2: coord,
           isPrimary: true,
         ));
       } else {
         out.add(GuideDrawSegment(
           x1: coord,
-          y1: c1,
+          y1: pos,
           x2: coord,
-          y2: c2,
+          y2: end,
           isPrimary: true,
         ));
       }
@@ -749,33 +759,116 @@ int piecesOnMarkedLine(
   );
 }
 
-/// Purchase qty from drawn segments: full lengths + packed scraps.
-/// Same idea as cassette packing — one stock profile can cover several short cuts.
+/// Trim from each factory end that removes a lock/connector (cm).
+///
+/// Profiles join lock-to-lock. Cutting both ends leaves a middle remnant without
+/// locks — that remnant is scrap. Wall-to-wall spans on the perimeter angle do
+/// not need locks; max useful length after trimming both ends is
+/// [GuideKind.lengthCm] − 2×[guideLockTrimCm] (e.g. 340 cm for 3600).
+const double guideLockTrimCm = 10;
+
+/// Extra length reserved on each side of a lock-to-lock scrap join (cm).
+///
+/// Two one-lock remnants of lengths L1, L2 can cover a span [need] only if
+/// `L1 + L2 − 2×guideJoinMarginCm >= need`.
+const double guideJoinMarginCm = 20;
+
+/// Purchase qty for one stock length, with one-lock remnant reuse + joins.
+///
+/// Factory bars have locks on both ends. Cutting once yields two one-lock
+/// pieces. Any further cut on a remnant removes its last lock — the leftover
+/// is scrap and is **not** banked. So one purchased bar yields at most
+/// **two** usable short pieces (both ends), never a chain of middle cuts.
+///
+/// - Full (~stock) pieces → +1 each, no remnant.
+/// - Short pieces: prefer a single remnant ≥ need (consume whole remnant),
+///   else a pair with usable `L1+L2−2×[guideJoinMarginCm]`, else buy a new
+///   bar and bank `stock−need` as the other one-lock end when useful.
+/// - Crumbs shorter than [minUsefulCm] ignored.
 int packGuidePurchaseCount(
   List<GuideDrawSegment> segments,
   double stockLenCm, {
   double minUsefulCm = 5.0,
 }) {
   if (stockLenCm <= 0 || segments.isEmpty) return 0;
-  var full = 0;
-  var scrap = 0.0;
+
   const eps = 0.5;
+  final needs = <double>[];
   for (final seg in segments) {
     final len = math.sqrt(
       (seg.x2 - seg.x1) * (seg.x2 - seg.x1) + (seg.y2 - seg.y1) * (seg.y2 - seg.y1),
     );
     if (len < minUsefulCm) continue;
-    if (len >= stockLenCm - eps) {
-      full++;
-    } else {
-      scrap += len;
-    }
+    needs.add(len);
   }
-  return full + (scrap / stockLenCm).ceil();
+  if (needs.isEmpty) return 0;
+
+  // Longest first so large spans claim new stock / big remnants before small ones.
+  needs.sort((a, b) => b.compareTo(a));
+
+  var purchase = 0;
+  final remnants = <double>[]; // one-lock leftovers (at most one factory end)
+
+  bool tryConsumeSingleRemnant(double need) {
+    var bestIdx = -1;
+    var bestLen = double.infinity;
+    for (var i = 0; i < remnants.length; i++) {
+      final r = remnants[i];
+      if (r + eps >= need && r < bestLen) {
+        bestLen = r;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx < 0) return false;
+    // Taking the lock end for [need] leaves a double-cut middle — scrap.
+    remnants.removeAt(bestIdx);
+    return true;
+  }
+
+  bool tryConsumeJoinedRemnants(double need) {
+    // Prefer the tightest pair that still covers [need] after join margins.
+    var bestI = -1;
+    var bestJ = -1;
+    var bestSum = double.infinity;
+    for (var i = 0; i < remnants.length; i++) {
+      for (var j = i + 1; j < remnants.length; j++) {
+        final usable =
+            remnants[i] + remnants[j] - 2 * guideJoinMarginCm;
+        if (usable + eps >= need) {
+          final sum = remnants[i] + remnants[j];
+          if (sum < bestSum) {
+            bestSum = sum;
+            bestI = i;
+            bestJ = j;
+          }
+        }
+      }
+    }
+    if (bestI < 0) return false;
+    // Remove higher index first.
+    remnants.removeAt(bestJ);
+    remnants.removeAt(bestI);
+    return true;
+  }
+
+  for (final need in needs) {
+    if (need >= stockLenCm - eps) {
+      purchase++;
+      continue;
+    }
+    if (tryConsumeSingleRemnant(need)) continue;
+    if (tryConsumeJoinedRemnants(need)) continue;
+
+    purchase++;
+    final remnant = stockLenCm - need;
+    if (remnant >= minUsefulCm) remnants.add(remnant);
+  }
+
+  return purchase;
 }
 
 /// Count guide profiles from marks drawn on the layout grid.
-/// Scraps of the same profile length are packed across all lines.
+/// Segments of the same stock kind are packed together (remnants shared across lines).
 Map<String, int>? countGuidesFromMarks(
   List<CeilingGuideMark> guides,
   List<List<double>> walls, {
@@ -785,14 +878,12 @@ Map<String, int>? countGuidesFromMarks(
 }) {
   if (guides.isEmpty) return null;
 
-  final fullByKind = <String, int>{};
-  final scrapByKind = <String, double>{};
+  final segsByKind = <String, List<GuideDrawSegment>>{};
   final stockByKind = <String, double>{};
 
   for (final g in guides) {
     final name = g.kind.materialName;
-    final stock = g.kind.lengthCm.toDouble();
-    stockByKind[name] = stock;
+    stockByKind[name] = g.kind.lengthCm.toDouble();
     final segs = guideProfilePieceSegments(
       g,
       walls,
@@ -800,30 +891,122 @@ Map<String, int>? countGuidesFromMarks(
       offsetY: offsetY,
       cellSize: cellSize,
     );
-    const eps = 0.5;
-    const minUseful = 5.0;
-    for (final seg in segs) {
-      final len = math.sqrt(
-        (seg.x2 - seg.x1) * (seg.x2 - seg.x1) + (seg.y2 - seg.y1) * (seg.y2 - seg.y1),
-      );
-      if (len < minUseful) continue;
-      if (len >= stock - eps) {
-        fullByKind[name] = (fullByKind[name] ?? 0) + 1;
-      } else {
-        scrapByKind[name] = (scrapByKind[name] ?? 0) + len;
-      }
-    }
+    segsByKind.putIfAbsent(name, () => <GuideDrawSegment>[]).addAll(segs);
   }
 
-  if (fullByKind.isEmpty && scrapByKind.isEmpty) return null;
+  if (segsByKind.isEmpty) return null;
   final counts = <String, int>{};
-  for (final name in {...fullByKind.keys, ...scrapByKind.keys}) {
-    final stock = stockByKind[name] ?? 1;
-    final full = fullByKind[name] ?? 0;
-    final scrap = scrapByKind[name] ?? 0;
-    counts[name] = full + (scrap / stock).ceil();
+  for (final e in segsByKind.entries) {
+    final stock = stockByKind[e.key] ?? 1;
+    final n = packGuidePurchaseCount(e.value, stock);
+    if (n > 0) counts[e.key] = n;
   }
-  return counts;
+  return counts.isEmpty ? null : counts;
+}
+
+/// Frame template matching materials ceiling label.
+CeilingFrameTemplate ceilingFrameTemplateForLabel(String? ceilingLabel) {
+  return switch (ceilingLabel) {
+    'Грильято' => CeilingFrameTemplate.grilyatoClassic,
+    'GL' => CeilingFrameTemplate.grilyatoGl,
+    _ => CeilingFrameTemplate.armstrong,
+  };
+}
+
+/// Full carrier frame when the operator left no guide marks.
+List<CeilingGuideMark> autoGuideMarksForRoom({
+  required List<List<double>> walls,
+  required double offsetX,
+  required double offsetY,
+  required double cellSize,
+  required String? ceilingLabel,
+  String? cellSizeLabel,
+}) {
+  if (walls.length < 3 || cellSize <= 0) return const [];
+  final template = ceilingFrameTemplateForLabel(ceilingLabel);
+  final seed = seedFrameAtRoomCenter(
+    template: template,
+    offsetX: offsetX,
+    offsetY: offsetY,
+    cellSize: cellSize,
+    walls: walls,
+  );
+  return proposeCeilingFrame(
+    template: template,
+    seed: seed,
+    offsetX: offsetX,
+    offsetY: offsetY,
+    cellSize: cellSize,
+    walls: walls,
+    cellSizeLabel: cellSizeLabel ?? '100x100',
+  );
+}
+
+Set<String> guideKeysForCeilingType(CeilingType type) {
+  switch (type) {
+    case CeilingType.armstrong:
+    case CeilingType.grilyatoGl:
+      return {'Направляющая 3600', 'Направляющая 1200', 'Направляющая 600'};
+    case CeilingType.grilyatoClassic:
+      return {'Направляющая 2400', 'Направляющая 1200', 'Направляющая 600'};
+  }
+}
+
+List<CeilingGuideMark> filterGuideMarksForCeilingType(
+  List<CeilingGuideMark> marks,
+  CeilingType type,
+) {
+  return marks.where((m) {
+    switch (type) {
+      case CeilingType.armstrong:
+      case CeilingType.grilyatoGl:
+        return m.kind != GuideKind.g2400;
+      case CeilingType.grilyatoClassic:
+        return m.kind != GuideKind.g3600;
+    }
+  }).toList();
+}
+
+Map<String, int>? filterGuideCountsForCeilingType(
+  Map<String, int>? counts,
+  CeilingType type,
+) {
+  if (counts == null || counts.isEmpty) return null;
+  final allowed = guideKeysForCeilingType(type);
+  final out = <String, int>{};
+  for (final e in counts.entries) {
+    if (allowed.contains(e.key)) out[e.key] = e.value;
+  }
+  return out.isEmpty ? null : out;
+}
+
+void stripExtraneousForCeilingType(Map<String, int> out, CeilingType type) {
+  final forbiddenPrefixes = switch (type) {
+    CeilingType.armstrong => [
+      'Направляющая 2400',
+      'Соединитель',
+      'Профиль Папа',
+      'Профиль Мама',
+      'Заглушки',
+    ],
+    CeilingType.grilyatoClassic => ['Направляющая 3600', 'Заглушки'],
+    CeilingType.grilyatoGl => ['Направляющая 2400', 'Соединитель'],
+  };
+  out.removeWhere((k, _) {
+    for (final f in forbiddenPrefixes) {
+      if (k == f || k.startsWith('$f (')) return true;
+    }
+    return false;
+  });
+  if (type == CeilingType.armstrong) {
+    out.removeWhere(
+      (k, _) => k.startsWith('Плиты/кассеты (') && !k.contains('Армстронг'),
+    );
+  } else {
+    out.removeWhere(
+      (k, _) => k.startsWith('Плиты/кассеты (') && k.contains('Армстронг'),
+    );
+  }
 }
 
 Map<String, int> applyGuideOverrides(
@@ -831,21 +1014,62 @@ Map<String, int> applyGuideOverrides(
   Map<String, int>? guideCounts, {
   CeilingType type = CeilingType.armstrong,
 }) {
-  if (guideCounts == null || guideCounts.isEmpty) return result;
   final out = Map<String, int>.from(result);
-  for (final e in guideCounts.entries) {
+  stripExtraneousForCeilingType(out, type);
+
+  final filtered = filterGuideCountsForCeilingType(guideCounts, type);
+  if (filtered == null) return out;
+
+  final formulaSusp = out['Подвес'] ?? 0;
+
+  // Replace the whole carrier set from marks — clear formula lengths that
+  // were not placed (e.g. only 1200/600 on a small room must drop 3600).
+  for (final k in guideKeysForCeilingType(type)) {
+    out.remove(k);
+  }
+  out.remove('Подвес');
+  out.remove('Соединитель');
+
+  for (final e in filtered.entries) {
     out[e.key] = e.value;
   }
-  final g3600 = guideCounts['Направляющая 3600'];
-  final g2400 = guideCounts['Направляющая 2400'];
-  if (g3600 != null) {
+
+  final g3600 = filtered['Направляющая 3600'] ?? 0;
+  final g2400 = filtered['Направляющая 2400'] ?? 0;
+  final g1200 = filtered['Направляющая 1200'] ?? 0;
+  if (g3600 > 0) {
     out['Подвес'] = g3600 * 4;
-  } else if (g2400 != null) {
-    // Classic Grilyato: 3 hangers per 2400 main; otherwise 4.
+  } else if (g2400 > 0) {
     out['Подвес'] = g2400 * (type == CeilingType.grilyatoClassic ? 3 : 4);
-    out['Соединитель'] = g2400;
+    if (type == CeilingType.grilyatoClassic) {
+      out['Соединитель'] = g2400;
+    }
+  } else if (g1200 > 0) {
+    // No 3600/2400: 1200 act as mains. Spec is «mains × 4» for 3600
+    // (~0.9 m pitch). One 3600 ≈ three 1200 → ~1.33 hangers per 1200;
+    // use ×2 ( запас, closer to area formula than ×4).
+    out['Подвес'] = g1200 * 2;
+  } else if (formulaSusp > 0) {
+    out['Подвес'] = formulaSusp;
   }
+
+  stripExtraneousForCeilingType(out, type);
   return out;
+}
+
+bool _guideLineOnRoomBoundary({
+  required GuideAxis axis,
+  required int lineIndex,
+  required double offsetX,
+  required double offsetY,
+  required double cellSize,
+  required List<List<double>> walls,
+  double tolCm = 1.0,
+}) {
+  final (minB, maxB) = _roomSpan(axis, walls);
+  final offset = axis == GuideAxis.horizontal ? offsetY : offsetX;
+  final coord = offset + lineIndex * cellSize;
+  return (coord - minB).abs() <= tolCm || (coord - maxB).abs() <= tolCm;
 }
 
 bool _guideLineIntersectsRoom({
@@ -856,6 +1080,17 @@ bool _guideLineIntersectsRoom({
   required double cellSize,
   required List<List<double>> walls,
 }) {
+  if (_guideLineOnRoomBoundary(
+    axis: axis,
+    lineIndex: lineIndex,
+    offsetX: offsetX,
+    offsetY: offsetY,
+    cellSize: cellSize,
+    walls: walls,
+  )) {
+    // Perimeter is wall angle / edge — not a T-bar carrier line.
+    return false;
+  }
   final polygon = MaterialsCalculator.orderedPointsFromWalls(walls);
   if (polygon.length < 3) return false;
   final coord = axis == GuideAxis.horizontal

@@ -14,6 +14,8 @@ class FloorBoard {
     this.cut = false,
     this.cutWidthCm,
     this.cutHeightCm,
+    this.labelCxCm,
+    this.labelCyCm,
   });
 
   /// Center in room cm coordinates.
@@ -27,6 +29,14 @@ class FloorBoard {
   /// Approximate remaining size inside the room (cm), for cut boards.
   final double? cutWidthCm;
   final double? cutHeightCm;
+
+  /// Anchor for cut dimension label — centroid of the piece still inside the room.
+  /// Falls back to [cxCm]/[cyCm] when null.
+  final double? labelCxCm;
+  final double? labelCyCm;
+
+  double get labelX => labelCxCm ?? cxCm;
+  double get labelY => labelCyCm ?? cyCm;
 
   String get cutLabel {
     final w = (cutWidthCm ?? widthCm).round();
@@ -97,12 +107,19 @@ class FloorLayoutBuilder {
     final hit = _cache[key];
     if (hit != null) return hit;
 
+    if (covering == FloorCoveringKind.screed) {
+      const empty = FloorLayoutSnapshot(boards: [], fullCount: 0, cutCount: 0);
+      _cache[key] = empty;
+      return empty;
+    }
+
     final (minX0, maxX0, minY0, maxY0) = _bounds(walls);
-    final cx = (minX0 + maxX0) / 2;
-    final cy = (minY0 + maxY0) / 2;
+    var poly = _polygon(walls);
+    // Rotate around polygon centroid (not AABB center) so irregular rooms
+    // stay visually anchored when the user nudges the angle.
+    final (cx, cy) = _centroid(poly);
     final rot = ((rotationDeg % 360) + 360) % 360;
 
-    var poly = _polygon(walls);
     var minX = minX0;
     var maxX = maxX0;
     var minY = minY0;
@@ -153,6 +170,12 @@ class FloorLayoutBuilder {
             cut: b.cut,
             cutWidthCm: b.cutWidthCm,
             cutHeightCm: b.cutHeightCm,
+            labelCxCm: b.labelCxCm == null
+                ? null
+                : cx + (b.labelCxCm! - cx) * cos - (b.labelCyCm! - cy) * sin,
+            labelCyCm: b.labelCyCm == null
+                ? null
+                : cy + (b.labelCxCm! - cx) * sin + (b.labelCyCm! - cy) * cos,
           ),
       ];
     }
@@ -182,6 +205,7 @@ class FloorLayoutBuilder {
     int rot,
   ) {
     final buf = StringBuffer()
+      ..write('centroid|') // bust cache after pivot change
       ..write(covering.id)
       ..write('|')
       ..write(pattern.id)
@@ -254,6 +278,40 @@ class FloorLayoutBuilder {
     ];
   }
 
+  /// Area-weighted polygon centroid (shoelace). Falls back to vertex mean.
+  static (double, double) _centroid(List<(double, double)> poly) {
+    if (poly.isEmpty) return (0, 0);
+    if (poly.length < 3) {
+      var sx = 0.0, sy = 0.0;
+      for (final p in poly) {
+        sx += p.$1;
+        sy += p.$2;
+      }
+      return (sx / poly.length, sy / poly.length);
+    }
+    var area2 = 0.0;
+    var cx = 0.0;
+    var cy = 0.0;
+    final n = poly.length;
+    for (var i = 0; i < n; i++) {
+      final a = poly[i];
+      final b = poly[(i + 1) % n];
+      final cross = a.$1 * b.$2 - b.$1 * a.$2;
+      area2 += cross;
+      cx += (a.$1 + b.$1) * cross;
+      cy += (a.$2 + b.$2) * cross;
+    }
+    if (area2.abs() < 1e-9) {
+      var sx = 0.0, sy = 0.0;
+      for (final p in poly) {
+        sx += p.$1;
+        sy += p.$2;
+      }
+      return (sx / n, sy / n);
+    }
+    return (cx / (3 * area2), cy / (3 * area2));
+  }
+
   static List<(double, double)> _polygon(List<List<double>> walls) {
     final pts = <(double, double)>[];
     for (final w in walls) {
@@ -304,11 +362,15 @@ class FloorLayoutBuilder {
     final cut = inside < 4;
     double? cutW;
     double? cutH;
+    double? labelCx;
+    double? labelCy;
     if (cut) {
       final size = _estimateCutSize(cx, cy, bw, bh, cos, sin, poly);
       if (size != null) {
-        cutW = size.$1;
-        cutH = size.$2;
+        cutW = size.w;
+        cutH = size.h;
+        labelCx = size.cx;
+        labelCy = size.cy;
       }
     }
     return FloorBoard(
@@ -320,11 +382,17 @@ class FloorLayoutBuilder {
       cut: cut,
       cutWidthCm: cutW,
       cutHeightCm: cutH,
+      labelCxCm: labelCx,
+      labelCyCm: labelCy,
     );
   }
 
   /// Sample board local grid; bbox of samples inside room ≈ remaining piece.
-  static (double, double)? _estimateCutSize(
+  /// Also returns the centroid of inside samples for label placement.
+  ///
+  /// Step ≈ 1 cm so cut labels update every centimetre of layout offset
+  /// (old fixed 14×14 grid jumped ~boardLength/14 cm on laminate).
+  static ({double w, double h, double cx, double cy})? _estimateCutSize(
     double cx,
     double cy,
     double bw,
@@ -333,13 +401,13 @@ class FloorLayoutBuilder {
     double sin,
     List<(double, double)> poly,
   ) {
-    const n = 14;
     final hx = bw / 2, hy = bh / 2;
+    final stepU = math.min(1.0, math.max(0.5, bw / 120));
+    final stepV = math.min(1.0, math.max(0.5, bh / 120));
     double? minU, maxU, minV, maxV;
-    for (var i = 0; i <= n; i++) {
-      final u = -hx + (bw * i / n);
-      for (var j = 0; j <= n; j++) {
-        final v = -hy + (bh * j / n);
+    var sumX = 0.0, sumY = 0.0, count = 0;
+    for (var u = -hx; u <= hx + 1e-9; u += stepU) {
+      for (var v = -hy; v <= hy + 1e-9; v += stepV) {
         final wx = cx + u * cos - v * sin;
         final wy = cy + u * sin + v * cos;
         if (!_pointInPoly(wx, wy, poly)) continue;
@@ -347,13 +415,18 @@ class FloorLayoutBuilder {
         maxU = maxU == null ? u : math.max(maxU, u);
         minV = minV == null ? v : math.min(minV, v);
         maxV = maxV == null ? v : math.max(maxV, v);
+        sumX += wx;
+        sumY += wy;
+        count++;
       }
     }
-    if (minU == null || maxU == null || minV == null || maxV == null) return null;
+    if (minU == null || maxU == null || minV == null || maxV == null || count == 0) {
+      return null;
+    }
     final w = (maxU - minU).clamp(0.0, bw);
     final h = (maxV - minV).clamp(0.0, bh);
     if (w < 0.5 || h < 0.5) return null;
-    return (w, h);
+    return (w: w, h: h, cx: sumX / count, cy: sumY / count);
   }
 
   static List<FloorBoard> _straight(

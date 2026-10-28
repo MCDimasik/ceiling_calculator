@@ -122,14 +122,51 @@ Future<void> _ensureMigrations(Database db) async {
     'ALTER TABLE projects ADD COLUMN master_plan_json TEXT',
     'ALTER TABLE rooms ADD COLUMN layout_confirmed INTEGER DEFAULT 0',
     'ALTER TABLE rooms ADD COLUMN ceiling_guides_json TEXT',
+    'ALTER TABLE projects ADD COLUMN documentation_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN documentation_checklist_json TEXT',
     'ALTER TABLE supplier_prices ADD COLUMN unit_price_cost REAL NOT NULL DEFAULT 0',
     'ALTER TABLE supplier_prices ADD COLUMN unit_price_client REAL NOT NULL DEFAULT 0',
     'ALTER TABLE supplier_prices ADD COLUMN receipt_unit TEXT NOT NULL DEFAULT \'piece\'',
     'ALTER TABLE supplier_prices ADD COLUMN units_per_pack REAL NOT NULL DEFAULT 1',
+    'ALTER TABLE supplier_prices ADD COLUMN supplier_sku TEXT',
+    'ALTER TABLE projects ADD COLUMN archived_at TEXT',
+    'ALTER TABLE projects ADD COLUMN finish_extra_works_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN floor_screed_depth_cm REAL DEFAULT 5',
+    'ALTER TABLE rooms ADD COLUMN floor_prep_layers_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN ceiling_prep_layers_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN finish_include_floor INTEGER DEFAULT 1',
+    'ALTER TABLE rooms ADD COLUMN finish_include_walls INTEGER DEFAULT 1',
+    'ALTER TABLE rooms ADD COLUMN finish_include_ceiling INTEGER DEFAULT 1',
+    'ALTER TABLE rooms ADD COLUMN finish_include_extra_works INTEGER DEFAULT 1',
+    'ALTER TABLE rooms ADD COLUMN sort_index INTEGER DEFAULT 0',
+    'ALTER TABLE projects ADD COLUMN sort_index INTEGER DEFAULT 0',
+    'ALTER TABLE rooms ADD COLUMN floor_id INTEGER',
+    'ALTER TABLE rooms ADD COLUMN floor_covering_unit_price REAL',
+    'ALTER TABLE rooms ADD COLUMN ceiling_system_unit_price REAL',
+    'ALTER TABLE rooms ADD COLUMN floor_covering_rate_match_key TEXT',
+    'ALTER TABLE rooms ADD COLUMN floor_covering_rate_name TEXT',
+    'ALTER TABLE rooms ADD COLUMN ceiling_system_rate_match_key TEXT',
+    'ALTER TABLE rooms ADD COLUMN ceiling_system_rate_name TEXT',
+    'ALTER TABLE rooms ADD COLUMN special_space_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN floor_covering_materials_json TEXT',
+    'ALTER TABLE rooms ADD COLUMN ceiling_system_materials_json TEXT',
   ];
   for (final ddl in alters) {
     try {
       await db.execute(ddl);
     } catch (_) {}
   }
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS project_floors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      sort_index INTEGER NOT NULL DEFAULT 0,
+      floor_number INTEGER NOT NULL DEFAULT 1,
+      typical_group_id INTEGER,
+      typical_index INTEGER NOT NULL DEFAULT 0,
+      typical_span_end INTEGER,
+      FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+    )
+  ''');
 }
