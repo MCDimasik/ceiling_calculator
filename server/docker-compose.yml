@@ -1,0 +1,14 @@
+services:
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8010:8010"
+    environment:
+      CEILING_SYNC_JWT_SECRET: change-me-in-prod
+      CEILING_SYNC_DB: /data/ceiling_sync.db
+    volumes:
+      - ceiling_sync_data:/data
+    restart: unless-stopped
+
+volumes:
+  ceiling_sync_data:

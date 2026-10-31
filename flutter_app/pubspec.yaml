@@ -18,6 +18,8 @@ dependencies:
   shared_preferences: ^2.5.3
   collection: ^1.19.1
   crypto: ^3.0.7
+  http: ^1.2.2
+  package_info_plus: ^10.2.2
   file_picker: ^12.1.0
   share_plus: ^13.3.0
   video_player: ^2.14.0
@@ -28,6 +30,7 @@ dependencies:
   roomplan_flutter: ^0.2.1
   printing: ^5.15.1
   flutter_onnxruntime: ^1.9.0
+  desktop_drop: ^0.8.4
 
 dev_dependencies:
   flutter_test:

@@ -6,6 +6,7 @@ import '../domain/finish_extra_works.dart';
 import '../domain/finish_layer_pricing.dart';
 import '../domain/finish_model.dart';
 import '../domain/finish_vedomost.dart';
+import '../domain/local_user_role.dart';
 import '../domain/materials_calculator.dart';
 import '../domain/models.dart';
 import '../domain/money_format.dart';
@@ -317,10 +318,11 @@ class _FinishProjectScreenState extends State<FinishProjectScreen>
             },
             icon: const Icon(Icons.apartment_outlined),
           ),
-          TextButton(
-            onPressed: _openMaterials,
-            child: const Text('Ведомость'),
-          ),
+          if (AppScope.of(context).user.effectiveRole.canFinishVedomost)
+            TextButton(
+              onPressed: _openMaterials,
+              child: const Text('Ведомость'),
+            ),
         ],
       ),
       floatingActionButton: _showExtraFab
@@ -449,7 +451,8 @@ class _OverviewTab extends StatelessWidget {
                 if (openings > 0.005)
                   _kv('Проёмы (вычтены)', '${openings.toStringAsFixed(2)} м²'),
                 _kv('Другие работы', '$extraCount поз.'),
-                if (moneyTotal > 0) ...[
+                if (moneyTotal > 0 &&
+                    AppScope.of(context).user.effectiveRole.canPricing) ...[
                   const Divider(height: 20),
                   Text(
                     'Работы по расценкам слоёв',
@@ -473,18 +476,23 @@ class _OverviewTab extends StatelessWidget {
           ),
           const SizedBox(height: 12),
         ],
-        FilledButton.tonalIcon(
-          onPressed: onOpenMaterials,
-          icon: const Icon(Icons.inventory_2_outlined),
-          label: const Text('Ведомость отделки объекта'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: rooms.isEmpty ? null : onApplyLayerPrices,
-          icon: const Icon(Icons.payments_outlined),
-          label: const Text('Цены слоёв для всех помещений'),
-        ),
-        const SizedBox(height: 20),
+        if (AppScope.of(context).user.effectiveRole.canFinishVedomost) ...[
+          FilledButton.tonalIcon(
+            onPressed: onOpenMaterials,
+            icon: const Icon(Icons.inventory_2_outlined),
+            label: const Text('Ведомость отделки объекта'),
+          ),
+          const SizedBox(height: 8),
+        ],
+        if (AppScope.of(context).user.effectiveRole.canPricing) ...[
+          OutlinedButton.icon(
+            onPressed: rooms.isEmpty ? null : onApplyLayerPrices,
+            icon: const Icon(Icons.payments_outlined),
+            label: const Text('Цены слоёв для всех помещений'),
+          ),
+          const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 12),
         Text('Помещения', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         if (rooms.isEmpty)
@@ -797,15 +805,11 @@ class _RoomTilesGrid extends StatelessWidget {
       ),
       itemBuilder: (context, index) {
         final room = rooms[index];
-        final floor = roomFloorLabel(room: room, floors: floors);
         final areaOrExtra = subtitleFor?.call(room) ??
             (room.isSpecialSpace
                 ? (room.specialSpace?.kindLabelRu ?? 'Особое')
                 : '${MaterialsCalculator.roomAreaM2(room.walls).toStringAsFixed(1)} м²');
-        final subtitle = [
-          if (floor != null) floor,
-          areaOrExtra,
-        ].join('\n');
+        final subtitle = areaOrExtra;
         return Material(
           color: Colors.transparent,
           child: InkWell(
@@ -823,7 +827,7 @@ class _RoomTilesGrid extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      room.name,
+                      roomNameWithFloor(room: room, floors: floors),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleMedium?.copyWith(

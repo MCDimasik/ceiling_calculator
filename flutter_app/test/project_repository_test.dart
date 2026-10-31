@@ -137,4 +137,67 @@ void main() {
     expect(again!.rooms.length, 1);
     expect(again.rooms.first.name, 'Only');
   });
+
+  test('share payload snapshot creates project for another owner', () async {
+    await repo.setActiveOwnerLogin('director');
+    final project = await repo.createProject('Пархоменко 24');
+    final r1 = await repo.createRoom(project.id!, 'Кабинет');
+    r1.walls = [
+      [0, 0, 400, 0],
+      [400, 0, 400, 300],
+      [400, 300, 0, 300],
+      [0, 300, 0, 0],
+    ];
+    await repo.updateRoom(r1);
+    await repo.createRoom(project.id!, 'Коридор');
+
+    final payload = await repo.buildProjectSharePayload(
+      project.id!,
+      roomIds: [r1.id!],
+    );
+    expect(payload['room_count'], 1);
+    expect(payload['snapshot'], isA<Map>());
+    expect((payload['rooms_preview'] as List).length, 1);
+
+    await repo.setActiveOwnerLogin('monter');
+    expect(await repo.listProjects(force: true), isEmpty);
+
+    final newId = await repo.applyProjectSharePayload(
+      payload,
+      createAsName: 'Пархоменко 24',
+    );
+    final list = await repo.listProjects(force: true);
+    expect(list.length, 1);
+    expect(list.first.id, newId);
+    expect(list.first.name, 'Пархоменко 24');
+    final loaded = await repo.getProject(newId);
+    expect(loaded!.rooms.length, 1);
+    expect(loaded.rooms.first.name, 'Кабинет');
+    expect(loaded.rooms.first.walls.length, 4);
+  });
+
+  test('share merge into renamed existing project', () async {
+    await repo.setActiveOwnerLogin('director');
+    final src = await repo.createProject('Объект А');
+    final room = await repo.createRoom(src.id!, 'Зал');
+    room.walls = [
+      [0, 0, 200, 0],
+      [200, 0, 200, 200],
+      [200, 200, 0, 200],
+      [0, 200, 0, 0],
+    ];
+    await repo.updateRoom(room);
+    final payload = await repo.buildProjectSharePayload(src.id!);
+
+    await repo.setActiveOwnerLogin('monter');
+    final local = await repo.createProject('Моё имя объекта');
+    await repo.createRoom(local.id!, 'Уже было');
+
+    await repo.applyProjectSharePayload(
+      payload,
+      intoProjectId: local.id,
+    );
+    final loaded = await repo.getProject(local.id!);
+    expect(loaded!.rooms.map((r) => r.name).toSet(), {'Уже было', 'Зал'});
+  });
 }

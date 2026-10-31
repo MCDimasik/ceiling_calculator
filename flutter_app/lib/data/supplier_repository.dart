@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../domain/cost_calculator.dart';
 import '../domain/material_catalog.dart';
+import '../domain/sync_revisions.dart';
 import '../domain/user_product_aliases.dart';
 
 class SupplierRepository {
@@ -27,6 +28,7 @@ class SupplierRepository {
       'created_at': s.createdAt.toIso8601String(),
     });
     await _ensureDefaultPrices(s.id!);
+    await SyncRevisions.touch(SyncRevisions.supplierKey(s.name));
     return s;
   }
 
@@ -182,6 +184,18 @@ class SupplierRepository {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    final rows = await _db.query(
+      'suppliers',
+      columns: ['name'],
+      where: 'id = ?',
+      whereArgs: [supplierId],
+      limit: 1,
+    );
+    if (rows.isNotEmpty) {
+      await SyncRevisions.touch(
+        SyncRevisions.supplierKey(rows.first['name'] as String),
+      );
+    }
   }
 
   Future<Map<String, SupplierPrice>> pricesByCalcMatchKey(int supplierId) async {
@@ -221,5 +235,114 @@ class SupplierRepository {
         'units_per_pack': defaultUnitsPerPack(e.itemKey).toDouble(),
       });
     }
+  }
+
+  Map<String, dynamic> _priceToSyncJson(SupplierPrice p) => {
+        'item_key': p.itemKey,
+        'product_name': p.productName,
+        'unit_price_cost': p.unitPriceCost,
+        'unit_price_client': p.unitPriceClient,
+        'receipt_unit': p.receiptUnit,
+        'units_per_pack': p.unitsPerPack,
+        'supplier_sku': p.supplierSku,
+      };
+
+  SupplierPrice _priceFromSyncJson(Map<String, dynamic> j) => SupplierPrice(
+        itemKey: j['item_key'] as String? ?? '',
+        productName: j['product_name'] as String? ?? '',
+        unitPriceCost: (j['unit_price_cost'] as num?)?.toDouble() ?? 0,
+        unitPriceClient: (j['unit_price_client'] as num?)?.toDouble() ?? 0,
+        receiptUnit: j['receipt_unit'] as String? ?? 'piece',
+        unitsPerPack: (j['units_per_pack'] as num?)?.toDouble() ?? 1,
+        supplierSku: j['supplier_sku'] as String? ?? '',
+      );
+
+  /// Snapshot of one or all suppliers for inbox «Расценки / материалы».
+  ///
+  /// [supplierIds] null → all; empty → none.
+  /// [itemKeysBySupplier] optional filter per supplier (explicit selection).
+  Future<({List<Map<String, dynamic>> preview, List<Map<String, dynamic>> snapshot, int priceCount})>
+      buildSuppliersShareParts({
+    Iterable<int>? supplierIds,
+    Map<int, Iterable<String>>? itemKeysBySupplier,
+  }) async {
+    final all = await listSuppliers();
+    final filter = supplierIds?.toSet();
+    final chosen = filter == null
+        ? all
+        : [for (final s in all) if (s.id != null && filter.contains(s.id)) s];
+    final preview = <Map<String, dynamic>>[];
+    final snap = <Map<String, dynamic>>[];
+    var priceCount = 0;
+    for (final s in chosen) {
+      if (s.id == null) continue;
+      final prices = await listPrices(s.id!);
+      final keyFilter = itemKeysBySupplier?[s.id!]?.toSet();
+      final List<SupplierPrice> lines;
+      if (keyFilter != null) {
+        lines = [
+          for (final p in prices)
+            if (keyFilter.contains(p.itemKey)) p,
+        ];
+      } else {
+        // Skip empty default catalogs with all zeros when sending whole supplier.
+        final priced = [
+          for (final p in prices)
+            if (p.unitPriceCost > 0 ||
+                p.unitPriceClient > 0 ||
+                p.supplierSku.isNotEmpty)
+              p,
+        ];
+        lines = priced.isNotEmpty ? priced : prices;
+      }
+      if (lines.isEmpty) continue;
+      priceCount += lines.length;
+      preview.add({'name': s.name, 'prices': lines.length});
+      snap.add({
+        'name': s.name,
+        'prices': [for (final p in lines) _priceToSyncJson(p)],
+      });
+    }
+    return (preview: preview, snapshot: snap, priceCount: priceCount);
+  }
+
+  /// Merge suppliers from share snapshot by name (create if missing).
+  /// Returns number of price rows upserted.
+  Future<int> applySuppliersShareSnapshot(List<dynamic> suppliersRaw) async {
+    var applied = 0;
+    for (final raw in suppliersRaw) {
+      if (raw is! Map) continue;
+      final name = (raw['name'] as String?)?.trim() ?? '';
+      if (name.isEmpty) continue;
+      final supplier = await getOrCreateSupplier(name);
+      final pricesRaw = raw['prices'];
+      if (pricesRaw is! List) continue;
+      for (final pr in pricesRaw) {
+        if (pr is! Map) continue;
+        final price = _priceFromSyncJson(Map<String, dynamic>.from(pr));
+        if (price.itemKey.isEmpty && price.productName.isEmpty) continue;
+        if (price.itemKey.isEmpty) {
+          // Fallback key from name — rare for custom lines.
+          final key =
+              'sync_${price.productName.hashCode.toRadixString(16)}';
+          await upsertPrice(
+            supplier.id!,
+            SupplierPrice(
+              itemKey: key,
+              productName: price.productName,
+              unitPriceCost: price.unitPriceCost,
+              unitPriceClient: price.unitPriceClient,
+              receiptUnit: price.receiptUnit,
+              unitsPerPack: price.unitsPerPack,
+              supplierSku: price.supplierSku,
+            ),
+          );
+        } else {
+          await upsertPrice(supplier.id!, price);
+        }
+        applied++;
+      }
+    }
+    return applied;
   }
 }

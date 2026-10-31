@@ -4,6 +4,10 @@ import '../app_scope.dart';
 import '../domain/finish_model.dart';
 import '../domain/models.dart';
 import '../domain/project_transfer.dart';
+import 'adaptive_layout.dart';
+import 'desktop_cascade.dart';
+import 'in_app_share_flow.dart';
+import 'widgets/cascade_pane_toolbar.dart';
 import 'materials_flow_screens.dart';
 import 'materials_result_screen.dart';
 import 'project_dashboard_screen.dart';
@@ -22,6 +26,8 @@ class ProjectsScreen extends StatefulWidget {
     this.archived = false,
     this.materialsCalcMode,
     this.openDashboardOnSelect = false,
+    /// Desktop cascade: select project without Navigator / master-detail.
+    this.cascadeMode = false,
   });
 
   final AppModule module;
@@ -31,6 +37,7 @@ class ProjectsScreen extends StatefulWidget {
 
   /// Home «Сводка объектов» — open [ProjectDashboardScreen] instead of rooms.
   final bool openDashboardOnSelect;
+  final bool cascadeMode;
 
   @override
   State<ProjectsScreen> createState() => _ProjectsScreenState();
@@ -48,9 +55,19 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   /// Blocks pull-to-reveal archive while the reorder handle / list drag is active.
   bool _reorderHandlePressed = false;
   bool _reorderDragActive = false;
+  /// Desktop master–detail: selected object (rooms pane on the right).
+  int? _selectedProjectId;
 
   bool get _archivePullLocked =>
       _reorderHandlePressed || _reorderDragActive;
+
+  bool get _useMasterDetail {
+    if (widget.cascadeMode) return false;
+    if (widget.archived) return false;
+    if (widget.openDashboardOnSelect) return false;
+    if (widget.materialsCalcMode != null) return false;
+    return AdaptiveBreakpoints.canMasterDetail(context);
+  }
 
   void _setReorderHandlePressed(bool pressed) {
     if (_reorderHandlePressed == pressed) return;
@@ -168,7 +185,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   Future<void> _shareProject(Project project) async {
     final full = await AppScope.of(context).projects.getProject(project.id!);
     if (full == null || !mounted) return;
-    await shareProject(full);
+    await shareProjectOrRooms(this.context, project: full);
   }
 
   Future<void> _createProject() async {
@@ -270,6 +287,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
   Future<void> _openProject(Project project) async {
     if (project.id == null) return;
+    final cascade = DesktopCascadeHost.maybeOf(context);
+    if (widget.cascadeMode && cascade != null) {
+      await AppScope.of(context).projects.getProject(project.id!);
+      if (!mounted) return;
+      cascade.openProject(project.id!);
+      return;
+    }
     if (widget.materialsCalcMode == MaterialsCalcMode.ceiling ||
         widget.materialsCalcMode == MaterialsCalcMode.finish) {
       await Navigator.of(context).push(
@@ -293,6 +317,11 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         ),
       );
       await _reload();
+      return;
+    }
+    // Full HD / wide: keep list + open rooms in the right pane.
+    if (_useMasterDetail) {
+      setState(() => _selectedProjectId = project.id);
       return;
     }
     await Navigator.of(context).push(
@@ -333,29 +362,80 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ScreenScaffold(
-      appBar: AppBar(
-        title: Text(_appBarTitle()),
-        actions: [
-          if (!widget.archived)
-            IconButton(
-              tooltip: 'Импорт .ccproj',
-              onPressed: _importProject,
-              icon: const Icon(Icons.file_open),
+    final split = _useMasterDetail;
+    // After reload, drop selection if project gone.
+    if (_selectedProjectId != null &&
+        !_projects.any((p) => p.id == _selectedProjectId)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _selectedProjectId = null);
+      });
+    }
+
+    final listPane = _buildBody();
+    final detailPane = _selectedProjectId == null
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text(
+                'Выберите объект слева —\nсправа откроются помещения',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.55),
+                    ),
+              ),
             ),
-          IconButton(
-            tooltip: 'Обновить',
-            onPressed: (_loading || _refreshing) ? null : () => _reload(showSpinner: false),
-            icon: _refreshing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh),
-          ),
-        ],
+          )
+        : RoomsScreen(
+            key: ValueKey('rooms-$_selectedProjectId'),
+            projectId: _selectedProjectId!,
+            module: widget.module,
+            embeddedInSplit: true,
+          );
+
+    final cascadeActions = <Widget>[
+      if (!widget.archived)
+        IconButton(
+          tooltip: 'Импорт .ccproj',
+          visualDensity: VisualDensity.compact,
+          onPressed: _importProject,
+          icon: const Icon(Icons.file_open),
+        ),
+      IconButton(
+        tooltip: 'Обновить',
+        visualDensity: VisualDensity.compact,
+        onPressed:
+            (_loading || _refreshing) ? null : () => _reload(showSpinner: false),
+        icon: _refreshing
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.refresh),
       ),
+    ];
+
+    return ScreenScaffold(
+      constrainDesktopWidth: !split,
+      desktopMaxWidth: AdaptiveBreakpoints.contentMaxFhd,
+      embedInParentBackground: widget.cascadeMode,
+      appBar: widget.cascadeMode
+          ? CascadePaneToolbar(
+              title: widget.archived ? 'Архив' : 'Объекты',
+              subtitle: _loading
+                  ? null
+                  : (_projects.isEmpty
+                      ? 'Пусто'
+                      : '${_projects.length} в списке'),
+              actions: cascadeActions,
+            )
+          : AppBar(
+              title: Text(_appBarTitle()),
+              actions: cascadeActions,
+            ),
       floatingActionButton: widget.archived
           ? null
           : AppExtendedFab(
@@ -364,7 +444,12 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
               icon: Icons.add,
               label: 'Проект',
             ),
-      body: _buildBody(),
+      body: split
+          ? MasterDetailSplit(
+              master: listPane,
+              detail: detailPane,
+            )
+          : listPane,
     );
   }
 
@@ -388,26 +473,14 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           children: [
             SizedBox(
               height: MediaQuery.sizeOf(context).height * 0.45,
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      widget.archived ? Icons.archive_outlined : Icons.folder_open,
-                      size: 56,
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(widget.archived ? 'Архив пуст' : 'Пока нет проектов'),
-                    if (!widget.archived) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Создайте первый проект кнопкой ниже',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ],
-                ),
+              child: DesktopEmptyState(
+                icon: widget.archived
+                    ? Icons.archive_outlined
+                    : Icons.folder_open,
+                title: widget.archived ? 'Архив пуст' : 'Пока нет проектов',
+                subtitle: widget.archived
+                    ? null
+                    : 'Создайте первый объект кнопкой «+ Проект»',
               ),
             ),
           ],
@@ -470,27 +543,50 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             }
             return date;
           }();
+          final cascadeSel =
+              widget.cascadeMode &&
+              DesktopCascadeHost.maybeOf(context)?.projectId == p.id;
+          final selected =
+              cascadeSel || (_useMasterDetail && p.id == _selectedProjectId);
           return Padding(
             key: ValueKey(p.id ?? 'project-$i'),
             padding: const EdgeInsets.only(bottom: 8),
-            child: LongPressActionTile(
-              leading: CircleAvatar(
-                child: Text(
-                  p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : '?',
+            child: DecoratedBox(
+              decoration: selected
+                  ? BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 2,
+                      ),
+                    )
+                  : const BoxDecoration(),
+              child: LongPressActionTile(
+                leading: CircleAvatar(
+                  radius: DesktopMetrics.leadingRadius(context),
+                  child: Text(
+                    p.name.isNotEmpty
+                        ? p.name.substring(0, 1).toUpperCase()
+                        : '?',
+                    style: TextStyle(
+                      fontSize: DesktopMetrics.of(context) ? 18 : 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
+                title: p.name,
+                subtitle: subtitle,
+                onOpen: () => _openProject(p),
+                onRename: () => _renameProject(p),
+                onShare: () => _shareProject(p),
+                onArchive: widget.archived ? null : () => _archiveProject(p),
+                onRestore: widget.archived ? () => _restoreProject(p) : null,
+                onDelete: () => _deleteProject(p),
+                reorderIndex: widget.archived ? null : i,
+                onReorderHandleActive: widget.archived
+                    ? null
+                    : _setReorderHandlePressed,
               ),
-              title: p.name,
-              subtitle: subtitle,
-              onOpen: () => _openProject(p),
-              onRename: () => _renameProject(p),
-              onShare: () => _shareProject(p),
-              onArchive: widget.archived ? null : () => _archiveProject(p),
-              onRestore: widget.archived ? () => _restoreProject(p) : null,
-              onDelete: () => _deleteProject(p),
-              reorderIndex: widget.archived ? null : i,
-              onReorderHandleActive: widget.archived
-                  ? null
-                  : _setReorderHandlePressed,
             ),
           );
         },

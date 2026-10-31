@@ -150,6 +150,7 @@ Future<void> _ensureMigrations(Database db) async {
     'ALTER TABLE rooms ADD COLUMN special_space_json TEXT',
     'ALTER TABLE rooms ADD COLUMN floor_covering_materials_json TEXT',
     'ALTER TABLE rooms ADD COLUMN ceiling_system_materials_json TEXT',
+    'ALTER TABLE projects ADD COLUMN owner_login TEXT',
   ];
   for (final ddl in alters) {
     try {

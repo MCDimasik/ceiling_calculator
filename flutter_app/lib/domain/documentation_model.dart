@@ -459,6 +459,104 @@ extension AsBuiltSchemeKindX on AsBuiltSchemeKind {
       };
 }
 
+/// Document categories in the per-project vault feed.
+enum DocumentVaultCategory {
+  kp,
+  smeta,
+  ks2,
+  ks3,
+  act,
+  scheme,
+  certificate,
+  other;
+
+  String get labelRu => switch (this) {
+        DocumentVaultCategory.kp => 'КП',
+        DocumentVaultCategory.smeta => 'Сметы / ведомости',
+        DocumentVaultCategory.ks2 => 'КС-2',
+        DocumentVaultCategory.ks3 => 'КС-3',
+        DocumentVaultCategory.act => 'Акты',
+        DocumentVaultCategory.scheme => 'Схемы',
+        DocumentVaultCategory.certificate => 'Сертификаты',
+        DocumentVaultCategory.other => 'Прочее',
+      };
+
+  static DocumentVaultCategory parse(String? raw) {
+    for (final v in DocumentVaultCategory.values) {
+      if (v.name == raw) return v;
+    }
+    return DocumentVaultCategory.other;
+  }
+}
+
+enum DocumentVaultSource {
+  export,
+  import,
+  attachment,
+  certificate;
+
+  String get labelRu => switch (this) {
+        DocumentVaultSource.export => 'Экспорт',
+        DocumentVaultSource.import => 'Импорт',
+        DocumentVaultSource.attachment => 'Вложение',
+        DocumentVaultSource.certificate => 'Сертификат',
+      };
+
+  static DocumentVaultSource parse(String? raw) {
+    for (final v in DocumentVaultSource.values) {
+      if (v.name == raw) return v;
+    }
+    return DocumentVaultSource.attachment;
+  }
+}
+
+/// File registered in the project's documents vault.
+class ProjectVaultEntry {
+  ProjectVaultEntry({
+    required this.id,
+    required this.category,
+    required this.name,
+    required this.relativePath,
+    required this.createdAt,
+    required this.source,
+    this.roomId,
+    this.absolutePathHint,
+  });
+
+  final String id;
+  final DocumentVaultCategory category;
+  final String name;
+  final String relativePath;
+  final DateTime createdAt;
+  final DocumentVaultSource source;
+  final int? roomId;
+  final String? absolutePathHint;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'category': category.name,
+        'name': name,
+        'relative_path': relativePath,
+        'created_at': createdAt.toIso8601String(),
+        'source': source.name,
+        if (roomId != null) 'room_id': roomId,
+        if (absolutePathHint != null) 'absolute_path': absolutePathHint,
+      };
+
+  static ProjectVaultEntry fromJson(Map<String, dynamic> json) =>
+      ProjectVaultEntry(
+        id: json['id'] as String? ?? '',
+        category: DocumentVaultCategory.parse(json['category'] as String?),
+        name: json['name'] as String? ?? '',
+        relativePath: json['relative_path'] as String? ?? '',
+        createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ??
+            DateTime.now(),
+        source: DocumentVaultSource.parse(json['source'] as String?),
+        roomId: (json['room_id'] as num?)?.toInt(),
+        absolutePathHint: json['absolute_path'] as String?,
+      );
+}
+
 /// Certificate file attached to a material type at project level.
 class MaterialCertificate {
   MaterialCertificate({
@@ -689,13 +787,15 @@ class ProjectDocumentation {
     this.nextActNumber = 1,
     this.primarySupplierId,
     ContractDocumentSettings? contractDocs,
+    List<ProjectVaultEntry>? vault,
   })  : stamp = stamp ?? DocumentationStamp(),
         contract = contract ?? ProjectContractInfo(),
         certificates = certificates ?? [],
         ks2Prices = ks2Prices ?? [],
         ks2Acts = ks2Acts ?? [],
         enabledWorkScopes = enabledWorkScopes ?? const ['floor', 'walls', 'ceiling'],
-        contractDocs = contractDocs ?? ContractDocumentSettings();
+        contractDocs = contractDocs ?? ContractDocumentSettings(),
+        vault = vault ?? [];
 
   DocumentationStamp stamp;
   ProjectContractInfo contract;
@@ -705,6 +805,9 @@ class ProjectDocumentation {
   String? actHiddenTemplatePath;
   List<MaterialCertificate> certificates;
   List<ProjectPriceLine> ks2Prices;
+
+  /// Per-project documents vault (exports, attachments).
+  List<ProjectVaultEntry> vault;
 
   /// When true, KS-2/KS-3 use only [ks2Prices], not global supplier catalog.
   bool useProjectPricesOnly;
@@ -754,6 +857,7 @@ class ProjectDocumentation {
         'next_act_number': nextActNumber,
         if (primarySupplierId != null) 'primary_supplier_id': primarySupplierId,
         'contract_docs': contractDocs.toJson(),
+        if (vault.isNotEmpty) 'vault': vault.map((e) => e.toJson()).toList(),
       };
 
   static ProjectDocumentation fromJson(Map<String, dynamic>? json) {
@@ -761,6 +865,7 @@ class ProjectDocumentation {
     final certsRaw = json['certificates'] as List? ?? [];
     final pricesRaw = json['ks2_prices'] as List? ?? [];
     final actsRaw = json['ks2_acts'] as List? ?? [];
+    final vaultRaw = json['vault'] as List? ?? [];
     return ProjectDocumentation(
       stamp: DocumentationStamp.fromJson(
         json['stamp'] is Map ? Map<String, dynamic>.from(json['stamp'] as Map) : null,
@@ -796,6 +901,10 @@ class ProjectDocumentation {
             ? Map<String, dynamic>.from(json['contract_docs'] as Map)
             : null,
       ),
+      vault: vaultRaw
+          .map((e) => ProjectVaultEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where((e) => e.id.isNotEmpty)
+          .toList(),
     );
   }
 }

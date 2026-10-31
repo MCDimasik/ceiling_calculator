@@ -28,6 +28,7 @@ class AppExtendedFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fg = foregroundColor;
+    // Same footprint on phone and PC so «+ Проект» matches «+ Комната».
     return SizedBox(
       width: kAppExtendedFabWidth,
       child: FloatingActionButton.extended(

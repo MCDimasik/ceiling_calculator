@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../domain/money_format.dart';
 import '../domain/work_rates_catalog.dart';
+import 'adaptive_layout.dart';
+import 'prices_share_flow.dart';
 import 'widgets/expand_section_header.dart';
 import 'widgets/long_press_action_barrier.dart';
+import 'widgets/long_press_action_tile.dart';
 import 'widgets/numeric_input.dart';
 import 'widgets/screen_scaffold.dart';
 
@@ -247,6 +250,17 @@ class _WorkRatesScreenState extends State<WorkRatesScreen> {
     _persist(snack: false);
   }
 
+  Future<void> _shareCategory(
+    WorkRateCategory cat, {
+    Iterable<String>? itemKeys,
+  }) {
+    return shareWorkCategory(
+      context,
+      category: cat,
+      itemMatchKeys: itemKeys,
+    );
+  }
+
   Widget _buildCategoryCard(WorkRateCategory c, {int? reorderIndex}) {
     final live = _liveCategory(c.id) ?? c;
     final n = c.items.length;
@@ -260,9 +274,11 @@ class _WorkRatesScreenState extends State<WorkRatesScreen> {
         reorderIndex: reorderIndex,
         onOpen: () => _openCategory(live),
         onRename: () => _renameCategory(live),
+        onShare: () => _shareCategory(live),
         onDelete: () => _deleteCategory(live),
         onAddWork: () => _addWorkToCategory(live),
         filteredItems: c.items,
+        onShareItem: (item) => _shareCategory(live, itemKeys: [item.matchKey]),
         onEditItem: (item) async {
           final liveItemIndex = live.items.indexWhere(
             (x) => x.matchKey == item.matchKey,
@@ -361,18 +377,22 @@ class _WorkRatesScreenState extends State<WorkRatesScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: TextField(
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'Поиск по работам',
-                      prefixIcon: Icon(Icons.search),
-                      border: OutlineInputBorder(),
-                      isDense: true,
+                      prefixIcon: const Icon(Icons.search),
+                      border: const OutlineInputBorder(),
+                      isDense: !DesktopMetrics.of(context),
                     ),
                     onChanged: (v) => setState(() => _query = v),
                   ),
                 ),
                 Expanded(
                   child: list.isEmpty
-                      ? const Center(child: Text('Нет категорий — добавьте первую'))
+                      ? const DesktopEmptyState(
+                          icon: Icons.handyman_outlined,
+                          title: 'Нет категорий',
+                          subtitle: 'Добавьте первую категорию работ',
+                        )
                       : _query.trim().isEmpty
                           ? ReorderableListView.builder(
                               padding: const EdgeInsets.fromLTRB(16, 4, 16, 88),
@@ -409,11 +429,13 @@ class _WorkRateCategoryCard extends StatefulWidget {
     this.reorderIndex,
     required this.onOpen,
     required this.onRename,
+    required this.onShare,
     required this.onDelete,
     required this.onAddWork,
     required this.filteredItems,
     required this.onEditItem,
     required this.onDeleteItem,
+    required this.onShareItem,
   });
 
   final WorkRateCategory category;
@@ -422,11 +444,13 @@ class _WorkRateCategoryCard extends StatefulWidget {
   final int? reorderIndex;
   final VoidCallback onOpen;
   final VoidCallback onRename;
+  final VoidCallback onShare;
   final VoidCallback onDelete;
   final VoidCallback onAddWork;
   final List<WorkRateItem> filteredItems;
   final Future<void> Function(WorkRateItem item) onEditItem;
   final Future<void> Function(WorkRateItem item) onDeleteItem;
+  final Future<void> Function(WorkRateItem item) onShareItem;
 
   @override
   State<_WorkRateCategoryCard> createState() => _WorkRateCategoryCardState();
@@ -521,6 +545,17 @@ class _WorkRateCategoryCardState extends State<_WorkRateCategoryCard> {
                       ),
                       const SizedBox(width: 6),
                       _actionIcon(
+                        icon: Icons.share_outlined,
+                        tooltip: 'Поделиться',
+                        backgroundColor: scheme.primaryContainer,
+                        foregroundColor: scheme.onPrimaryContainer,
+                        onPressed: () {
+                          _hideActions();
+                          widget.onShare();
+                        },
+                      ),
+                      const SizedBox(width: 6),
+                      _actionIcon(
                         icon: Icons.delete_outline,
                         tooltip: 'Удалить',
                         backgroundColor: scheme.error,
@@ -563,10 +598,17 @@ class _WorkRateCategoryCardState extends State<_WorkRateCategoryCard> {
                     const ListTile(dense: true, title: Text('Нет позиций'))
                   else
                     for (final item in widget.filteredItems)
-                      _WorkRateItemTile(
-                        item: item,
-                        onEdit: () => widget.onEditItem(item),
-                        onDelete: () => widget.onDeleteItem(item),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: LongPressActionTile(
+                          title: item.name,
+                          subtitle:
+                              '${item.unit} · ${item.unitPrice > 0 ? formatRub(item.unitPrice) : '—'}',
+                          leading: const Icon(Icons.handyman_outlined, size: 22),
+                          onOpen: () => widget.onEditItem(item),
+                          onShare: () => widget.onShareItem(item),
+                          onDelete: () => widget.onDeleteItem(item),
+                        ),
                       ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -582,47 +624,6 @@ class _WorkRateCategoryCardState extends State<_WorkRateCategoryCard> {
                 ],
               ),
             ),
-    );
-  }
-}
-
-class _WorkRateItemTile extends StatelessWidget {
-  const _WorkRateItemTile({
-    required this.item,
-    required this.onEdit,
-    required this.onDelete,
-  });
-
-  final WorkRateItem item;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      title: Text(item.name, maxLines: 2),
-      subtitle: Text(item.unit),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            item.unitPrice > 0 ? formatRub(item.unitPrice) : '—',
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          IconButton(
-            tooltip: 'Изменить',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined, size: 20),
-          ),
-          IconButton(
-            tooltip: 'Удалить',
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline, size: 20),
-          ),
-        ],
-      ),
-      onTap: onEdit,
     );
   }
 }
@@ -700,6 +701,18 @@ class _WorkRateCategoryScreen extends StatefulWidget {
 }
 
 class _WorkRateCategoryScreenState extends State<_WorkRateCategoryScreen> {
+  final Set<String> _selectedKeys = {};
+
+  bool get _selectionMode => _selectedKeys.isNotEmpty;
+
+  void _toggleSelected(String key) {
+    setState(() {
+      if (!_selectedKeys.remove(key)) _selectedKeys.add(key);
+    });
+  }
+
+  void _clearSelection() => setState(() => _selectedKeys.clear());
+
   Future<void> _edit(int index) async {
     final edited = await editWorkRateItemDialog(context, widget.category.items[index]);
     if (edited == null) return;
@@ -733,8 +746,31 @@ class _WorkRateCategoryScreenState extends State<_WorkRateCategoryScreen> {
       ),
     );
     if (del != true) return;
-    setState(() => widget.category.items.removeAt(index));
+    setState(() {
+      _selectedKeys.remove(item.matchKey);
+      widget.category.items.removeAt(index);
+    });
     widget.onChanged();
+  }
+
+  Future<void> _shareItem(WorkRateItem item) {
+    return shareWorkCategory(
+      context,
+      category: widget.category,
+      itemMatchKeys: [item.matchKey],
+    );
+  }
+
+  Future<void> _shareSelected() {
+    return shareWorkCategory(
+      context,
+      category: widget.category,
+      itemMatchKeys: _selectedKeys,
+    );
+  }
+
+  Future<void> _shareCategory() {
+    return shareWorkCategory(context, category: widget.category);
   }
 
   Future<void> _rename() async {
@@ -767,39 +803,95 @@ class _WorkRateCategoryScreenState extends State<_WorkRateCategoryScreen> {
   @override
   Widget build(BuildContext context) {
     final items = widget.category.items;
-    return ScreenScaffold(
-      appBar: AppBar(
-        title: Text(widget.category.name),
-        actions: [
-          IconButton(
-            tooltip: 'Переименовать',
-            onPressed: _rename,
-            icon: const Icon(Icons.edit_outlined),
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectionMode) _clearSelection();
+      },
+      child: ScreenScaffold(
+        appBar: AppBar(
+          leading: _selectionMode
+              ? IconButton(
+                  tooltip: 'Снять выбор',
+                  onPressed: _clearSelection,
+                  icon: const Icon(Icons.close),
+                )
+              : null,
+          title: Text(
+            _selectionMode
+                ? 'Выбрано: ${_selectedKeys.length}'
+                : widget.category.name,
           ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _add,
-        icon: const Icon(Icons.add),
-        label: const Text('Работа'),
-      ),
-      body: items.isEmpty
-          ? const Center(child: Text('Нет позиций — нажмите «Работа»'))
-          : ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
-              itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 6),
-              itemBuilder: (context, i) {
-                final item = items[i];
-                return Card(
-                  child: _WorkRateItemTile(
-                    item: item,
-                    onEdit: () => _edit(i),
-                    onDelete: () => _delete(i),
+          actions: [
+            if (!_selectionMode) ...[
+              IconButton(
+                tooltip: 'Поделиться категорией',
+                onPressed: items.isEmpty ? null : _shareCategory,
+                icon: const Icon(Icons.share_outlined),
+              ),
+              IconButton(
+                tooltip: 'Переименовать',
+                onPressed: _rename,
+                icon: const Icon(Icons.edit_outlined),
+              ),
+            ],
+          ],
+        ),
+        floatingActionButton: _selectionMode
+            ? null
+            : FloatingActionButton.extended(
+                onPressed: _add,
+                icon: const Icon(Icons.add),
+                label: const Text('Работа'),
+              ),
+        bottomNavigationBar: _selectionMode
+            ? SafeArea(
+                child: Material(
+                  elevation: 8,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextButton.icon(
+                            onPressed: _shareSelected,
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Поделиться'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                );
-              },
-            ),
+                ),
+              )
+            : null,
+        body: items.isEmpty
+            ? const Center(child: Text('Нет позиций — нажмите «Работа»'))
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                itemBuilder: (context, i) {
+                  final item = items[i];
+                  final selected = _selectedKeys.contains(item.matchKey);
+                  return LongPressActionTile(
+                    title: item.name,
+                    subtitle:
+                        '${item.unit} · ${item.unitPrice > 0 ? formatRub(item.unitPrice) : '—'}',
+                    leading: const Icon(Icons.handyman_outlined),
+                    selected: selected,
+                    selectionMode: _selectionMode,
+                    onToggleSelect: () => _toggleSelected(item.matchKey),
+                    onOpen: () => _edit(i),
+                    onShare: () => _shareItem(item),
+                    onDelete: () => _delete(i),
+                  );
+                },
+              ),
+      ),
     );
   }
 }

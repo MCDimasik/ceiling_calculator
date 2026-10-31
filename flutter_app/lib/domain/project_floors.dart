@@ -132,3 +132,13 @@ String? roomFloorLabel({
   }
   return null;
 }
+
+/// Picker / list title: `Имя · этаж` when floors are explicit, else just the name.
+String roomNameWithFloor({
+  required Room room,
+  required List<ProjectFloor> floors,
+}) {
+  final floor = roomFloorLabel(room: room, floors: floors);
+  if (floor == null || floor.isEmpty) return room.name;
+  return '${room.name} · $floor';
+}

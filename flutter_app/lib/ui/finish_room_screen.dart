@@ -7,6 +7,7 @@ import '../app_scope.dart';
 import '../data/project_repository.dart';
 import '../domain/ceiling_grid.dart';
 import '../domain/finish_model.dart';
+import '../domain/local_user_role.dart';
 import '../domain/finish_material_links.dart';
 import '../domain/cost_calculator.dart';
 import '../domain/documentation_model.dart';
@@ -111,6 +112,16 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
     _started = true;
     WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant FinishRoomScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.roomId != widget.roomId ||
+        oldWidget.projectId != widget.projectId) {
+      setState(() => _loading = true);
+      _load();
+    }
   }
 
   @override
@@ -266,12 +277,27 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
         const SnackBar(content: Text('Цены поставщика не загрузились — суммы без каталога')),
       );
     }
-    await _autofillMissingLayerPrices();
+    // Silent catalog fill on load — only when there is geometry / layers to price.
+    await _autofillMissingLayerPrices(notify: false);
   }
 
-  Future<void> _autofillMissingLayerPrices({bool onlyEmpty = true}) async {
+  bool get _hasPricableFinishContent {
+    final room = _room;
+    if (room == null) return false;
+    if (!room.hasLayout && room.walls.isEmpty) return false;
+    if (_wallLayers.any((l) => l.enabled)) return true;
+    if (_prepLayers(floor: true).any((l) => l.enabled)) return true;
+    if (_prepLayers(floor: false).any((l) => l.enabled)) return true;
+    return false;
+  }
+
+  Future<void> _autofillMissingLayerPrices({
+    bool onlyEmpty = true,
+    bool notify = true,
+  }) async {
     final room = _room;
     if (room == null || !mounted) return;
+    if (!notify && !_hasPricableFinishContent) return;
     final catalog = await WorkRatesCatalogStore.ensureLoaded();
     if (!mounted) return;
     final walls = _wallLayers.toList();
@@ -304,21 +330,12 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
     if (total > 0) {
       setState(() {});
       await _persist();
-      if (!mounted) return;
+      if (!mounted || !notify) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Подставлено цен: $total')),
       );
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            onlyEmpty
-                ? 'Пустых слоёв без цены не осталось (или нет совпадений в каталоге)'
-                : 'В каталоге нет подходящих позиций',
-          ),
-        ),
-      );
     }
+    // No snack when nothing filled — avoids noise on load / empty rooms.
   }
 
   /// Splits openings with quantity>1 into separate qty=1 rows so each can move alone.
@@ -3039,9 +3056,9 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
               susp: susp,
               cell: cell,
             );
-            // Re-suggest catalog price for the new system type if empty.
+            // Re-suggest catalog price for the new system type if empty (silent).
             if (_ceilingSystemPriceCtrl.text.trim().isEmpty) {
-              await _autofillMissingLayerPrices(onlyEmpty: true);
+              await _autofillMissingLayerPrices(onlyEmpty: true, notify: false);
             }
           },
         ),
@@ -3151,12 +3168,15 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
         ],
         const SizedBox(height: 20),
         _buildPrepLayersSection(floor: false),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => _openFinishVedomost(scope: FinishVedomostScope.ceiling),
-          icon: const Icon(Icons.calculate_outlined),
-          label: const Text('Ведомость отделки'),
-        ),
+        if (AppScope.of(context).user.effectiveRole.canFinishVedomost) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () =>
+                _openFinishVedomost(scope: FinishVedomostScope.ceiling),
+            icon: const Icon(Icons.calculate_outlined),
+            label: const Text('Ведомость отделки'),
+          ),
+        ],
       ],
     );
   }
@@ -3260,12 +3280,13 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
               },
             ),
             actions: [
-              TextButton(
-                onPressed: () => _openFinishVedomost(
-                  scope: FinishVedomostScopeX.fromRoomTab(locked),
+              if (AppScope.of(context).user.effectiveRole.canFinishVedomost)
+                TextButton(
+                  onPressed: () => _openFinishVedomost(
+                    scope: FinishVedomostScopeX.fromRoomTab(locked),
+                  ),
+                  child: const Text('Ведомость'),
                 ),
-                child: const Text('Ведомость'),
-              ),
             ],
           ),
           body: bodyForTab(locked),
@@ -3297,25 +3318,27 @@ class _FinishRoomScreenState extends State<FinishRoomScreen> with WidgetsBinding
             },
           ),
           actions: [
-            Builder(
-              builder: (tabCtx) => TextButton(
-                onPressed: () => _openFinishVedomost(tabContext: tabCtx),
-                child: const Text('Ведомость'),
+            if (AppScope.of(context).user.effectiveRole.canFinishVedomost)
+              Builder(
+                builder: (tabCtx) => TextButton(
+                  onPressed: () => _openFinishVedomost(tabContext: tabCtx),
+                  child: const Text('Ведомость'),
+                ),
               ),
-            ),
-            TextButton(
-              onPressed: () async {
-                await _persist();
-                if (!mounted) return;
-                await openRoomModule(
-                  context,
-                  projectId: widget.projectId,
-                  roomId: widget.roomId,
-                  module: AppModule.documentation,
-                );
-              },
-              child: const Text('Документация'),
-            ),
+            if (AppScope.of(context).user.effectiveRole.canDocumentation)
+              TextButton(
+                onPressed: () async {
+                  await _persist();
+                  if (!mounted) return;
+                  await openRoomModule(
+                    context,
+                    projectId: widget.projectId,
+                    roomId: widget.roomId,
+                    module: AppModule.documentation,
+                  );
+                },
+                child: const Text('Документация'),
+              ),
           ],
           bottom: TabBar(
             isScrollable: true,

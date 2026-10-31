@@ -340,8 +340,9 @@ class IsometricShellPainter extends CustomPainter {
       ..color = const Color(0xFFE8F0F8)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
+    // Ceiling = cooler translucent slab on top; floor = warmer ground plane.
     final topPaint = Paint()
-      ..color = const Color(0xFF6B8BA8)
+      ..color = const Color(0x996B9EC4)
       ..style = PaintingStyle.fill;
     final holePaint = Paint()
       ..color = const Color(0xFF0E1520)
@@ -351,7 +352,7 @@ class IsometricShellPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.4;
     final floorPaint = Paint()
-      ..color = const Color(0xFF2A3848)
+      ..color = const Color(0xFF5C4A3A)
       ..style = PaintingStyle.fill;
 
     final floorPath = Path();

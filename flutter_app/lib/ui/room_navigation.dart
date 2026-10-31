@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_scope.dart';
 import '../domain/finish_model.dart';
 import '../domain/finish_vedomost.dart';
+import '../domain/local_user_role.dart';
 import '../domain/models.dart';
 import '../domain/special_space.dart';
 import 'finish_floor_editor_screen.dart';
@@ -122,6 +123,9 @@ Future<void> openFinishRoom(
   bool replaceCurrent = false,
   int initialTabIndex = 0,
 }) async {
+  if (!AppScope.of(context).user.effectiveRole.canFinish) {
+    return;
+  }
   final project = await AppScope.of(context).projects.getProject(projectId);
   Room? room;
   if (project != null) {
@@ -272,7 +276,9 @@ Future<void> openRoomModule(
   required int roomId,
   required AppModule module,
 }) {
+  final role = AppScope.of(context).user.effectiveRole;
   if (module == AppModule.finish) {
+    if (!role.canFinish) return Future.value();
     return openFinishRoom(
       context,
       projectId: projectId,
@@ -281,6 +287,8 @@ Future<void> openRoomModule(
     );
   }
   if (module == AppModule.materials) {
+    // Finish materials screen — only for roles that can open finish.
+    if (!role.canFinish) return Future.value();
     return Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (_) => FinishMaterialsScreen(
@@ -289,6 +297,9 @@ Future<void> openRoomModule(
         ),
       ),
     );
+  }
+  if (module == AppModule.documentation && !role.canDocumentation) {
+    return Future.value();
   }
   return openRoomHub(
     context,

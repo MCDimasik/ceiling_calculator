@@ -402,8 +402,9 @@ class FloorLayoutBuilder {
     List<(double, double)> poly,
   ) {
     final hx = bw / 2, hy = bh / 2;
-    final stepU = math.min(1.0, math.max(0.5, bw / 120));
-    final stepV = math.min(1.0, math.max(0.5, bh / 120));
+    // Fixed 1 cm sampling — cut labels track joystick steps 1:1.
+    const stepU = 1.0;
+    const stepV = 1.0;
     double? minU, maxU, minV, maxV;
     var sumX = 0.0, sumY = 0.0, count = 0;
     for (var u = -hx; u <= hx + 1e-9; u += stepU) {

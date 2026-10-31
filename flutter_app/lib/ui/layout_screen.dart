@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_scope.dart';
 import '../data/project_repository.dart';
@@ -21,6 +22,8 @@ import '../domain/layout_layers.dart';
 import '../domain/layout_undo.dart';
 import '../domain/documentation_model.dart';
 import '../domain/project_materials.dart';
+import 'adaptive_layout.dart';
+import 'desktop_cascade.dart';
 import 'materials_flow_screens.dart';
 import 'materials_result_screen.dart';
 import 'room_navigation.dart';
@@ -170,6 +173,23 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
     WidgetsBinding.instance.addObserver(this);
     _transform.addListener(_onTransformChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void didUpdateWidget(covariant LayoutScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.roomId != widget.roomId ||
+        oldWidget.projectId != widget.projectId) {
+      setState(() {
+        _loading = true;
+        _viewApplied = false;
+        _lightIds.clear();
+        _guides.clear();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
   }
 
   @override
@@ -598,7 +618,13 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
   Future<void> _leaveLayout() async {
     // Do not silently confirm layout or invent carrier guides on back.
     await _persist(markLayoutConfirmed: false);
-    if (mounted) Navigator.of(context).pop();
+    if (!mounted) return;
+    final cascade = DesktopCascadeHost.maybeOf(context);
+    if (cascade != null) {
+      cascade.closeDetail();
+      return;
+    }
+    Navigator.of(context).pop();
   }
 
   Future<void> _persistWithAutoGuides({bool markLayoutConfirmed = true}) async {
@@ -1221,11 +1247,15 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
     final room = _room;
     if (room == null) {
       return Scaffold(
+        backgroundColor: Colors.transparent,
         appBar: AppBar(title: const Text('Раскладка')),
         body: const Center(child: Text('Комната не найдена')),
       );
@@ -1242,6 +1272,9 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
         'Площадь: ${area.toStringAsFixed(2)} м²  ·  '
         'Смещение: ${_visualOffsetX.round()}×${_visualOffsetY.round()} см'
         '$guideHint';
+    final inCascade = DesktopCascadeHost.maybeOf(context) != null;
+    final desktopChrome =
+        inCascade || AdaptiveBreakpoints.useDesktopChrome(context);
 
     return PopScope(
       canPop: false,
@@ -1250,6 +1283,7 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
         await _leaveLayout();
       },
       child: Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: Text(room.name),
         leading: IconButton(
@@ -1311,14 +1345,136 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
-            child: Text(stats, style: Theme.of(context).textTheme.bodySmall),
-          ),
-          Expanded(
-            child: Stack(
+      body: Focus(
+        autofocus: desktopChrome,
+        onKeyEvent: desktopChrome ? _onLayoutKey : null,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
+              child: Text(
+                desktopChrome
+                    ? '$stats\n←↑↓→ / WASD — сдвиг · 1–4 режимы · Space — панорама'
+                    : stats,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Expanded(
+              child: desktopChrome
+                  ? Stack(
+                      fit: StackFit.expand,
+                      clipBehavior: Clip.none,
+                      children: [
+                        _layoutCanvasStack(room),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: _LayoutDesktopFilterRail(
+                            mode: _mode,
+                            onMode: (m) => setState(() => _mode = m),
+                            showTileDims: _layers.tileDims,
+                            showWallDims: _layers.wallDims,
+                            onToggleTileDims: () => _setLayerValue(
+                              (l) => l.copyWith(tileDims: !l.tileDims),
+                            ),
+                            onToggleWallDims: () => _setLayerValue(
+                              (l) => l.copyWith(wallDims: !l.wallDims),
+                            ),
+                            guideKind: _guideKind,
+                            onGuideKind: (kind) => setState(() {
+                              _guideKind = kind;
+                              if (kind == GuideKind.g3600 ||
+                                  kind == GuideKind.g2400) {
+                                _mainGuideKind = kind;
+                              }
+                            }),
+                          ),
+                        ),
+                      ],
+                    )
+                  : _layoutCanvasStack(room),
+            ),
+            if (!desktopChrome) _layoutPhoneBottomBar(),
+          ],
+        ),
+      ),
+    ),
+    );
+  }
+
+  KeyEventResult _onLayoutKey(FocusNode node, KeyEvent event) {
+    // Physical keys so WASD works on any keyboard layout (RU/EN/…).
+    final physical = event.physicalKey;
+
+    if (event is KeyUpEvent) {
+      if (_isNudgePhysical(physical) && _joystickEnabled) {
+        _nudge(0, 0, finalize: true);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (physical == PhysicalKeyboardKey.digit1 ||
+        physical == PhysicalKeyboardKey.numpad1) {
+      setState(() => _mode = LayoutMode.grid);
+      return KeyEventResult.handled;
+    }
+    if (physical == PhysicalKeyboardKey.digit2 ||
+        physical == PhysicalKeyboardKey.numpad2) {
+      setState(() => _mode = LayoutMode.pan);
+      return KeyEventResult.handled;
+    }
+    if (physical == PhysicalKeyboardKey.digit3 ||
+        physical == PhysicalKeyboardKey.numpad3) {
+      setState(() => _mode = LayoutMode.guides);
+      return KeyEventResult.handled;
+    }
+    if (physical == PhysicalKeyboardKey.digit4 ||
+        physical == PhysicalKeyboardKey.numpad4) {
+      setState(() => _mode = LayoutMode.lights);
+      return KeyEventResult.handled;
+    }
+    if (physical == PhysicalKeyboardKey.space) {
+      setState(() => _mode = LayoutMode.pan);
+      return KeyEventResult.handled;
+    }
+    if (!_joystickEnabled) return KeyEventResult.ignored;
+    double dx = 0, dy = 0;
+    if (physical == PhysicalKeyboardKey.arrowUp ||
+        physical == PhysicalKeyboardKey.keyW) {
+      dy = 1;
+    } else if (physical == PhysicalKeyboardKey.arrowDown ||
+        physical == PhysicalKeyboardKey.keyS) {
+      dy = -1;
+    } else if (physical == PhysicalKeyboardKey.arrowLeft ||
+        physical == PhysicalKeyboardKey.keyA) {
+      dx = -1;
+    } else if (physical == PhysicalKeyboardKey.arrowRight ||
+        physical == PhysicalKeyboardKey.keyD) {
+      dx = 1;
+    } else {
+      return KeyEventResult.ignored;
+    }
+    _nudge(dx, dy);
+    return KeyEventResult.handled;
+  }
+
+  bool _isNudgePhysical(PhysicalKeyboardKey key) {
+    return key == PhysicalKeyboardKey.arrowUp ||
+        key == PhysicalKeyboardKey.arrowDown ||
+        key == PhysicalKeyboardKey.arrowLeft ||
+        key == PhysicalKeyboardKey.arrowRight ||
+        key == PhysicalKeyboardKey.keyW ||
+        key == PhysicalKeyboardKey.keyA ||
+        key == PhysicalKeyboardKey.keyS ||
+        key == PhysicalKeyboardKey.keyD;
+  }
+
+  Widget _layoutCanvasStack(Room room) {
+    return Stack(
               children: [
                 ColoredBox(
               color: CanvasPalette.bg,
@@ -1512,9 +1668,11 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
                     ),
                   ),
               ],
-            ),
-          ),
-          SafeArea(
+            );
+  }
+
+  Widget _layoutPhoneBottomBar() {
+    return SafeArea(
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
@@ -1667,10 +1825,231 @@ class _LayoutScreenState extends State<LayoutScreen> with WidgetsBindingObserver
                 },
               ),
             ),
-          ),
+          );
+  }
+}
+
+/// Vertical filter/mode rail overlaid on the layout canvas (desktop).
+/// Hover grows the chip and gently nudges neighbors.
+class _LayoutDesktopFilterRail extends StatefulWidget {
+  const _LayoutDesktopFilterRail({
+    required this.mode,
+    required this.onMode,
+    required this.showTileDims,
+    required this.showWallDims,
+    required this.onToggleTileDims,
+    required this.onToggleWallDims,
+    required this.guideKind,
+    required this.onGuideKind,
+  });
+
+  final LayoutMode mode;
+  final ValueChanged<LayoutMode> onMode;
+  final bool showTileDims;
+  final bool showWallDims;
+  final VoidCallback onToggleTileDims;
+  final VoidCallback onToggleWallDims;
+  final GuideKind guideKind;
+  final ValueChanged<GuideKind> onGuideKind;
+
+  @override
+  State<_LayoutDesktopFilterRail> createState() =>
+      _LayoutDesktopFilterRailState();
+}
+
+class _LayoutDesktopFilterRailState extends State<_LayoutDesktopFilterRail> {
+  int? _hoverIndex;
+
+  List<({String label, IconData icon, bool selected, VoidCallback onTap, Color? accent})>
+      _items() {
+    final modes = <({String label, IconData icon, bool selected, VoidCallback onTap, Color? accent})>[
+      (
+        label: 'Сетка',
+        icon: Icons.grid_on,
+        selected: widget.mode == LayoutMode.grid,
+        onTap: () => widget.onMode(LayoutMode.grid),
+        accent: null,
+      ),
+      (
+        label: 'Панорама',
+        icon: Icons.pan_tool_alt,
+        selected: widget.mode == LayoutMode.pan,
+        onTap: () => widget.onMode(LayoutMode.pan),
+        accent: null,
+      ),
+      (
+        label: 'Направл.',
+        icon: Icons.straighten,
+        selected: widget.mode == LayoutMode.guides,
+        onTap: () => widget.onMode(LayoutMode.guides),
+        accent: null,
+      ),
+      (
+        label: 'Свет',
+        icon: Icons.lightbulb_outline,
+        selected: widget.mode == LayoutMode.lights,
+        onTap: () => widget.onMode(LayoutMode.lights),
+        accent: null,
+      ),
+    ];
+    if (widget.mode == LayoutMode.guides) {
+      for (final kind in [
+        GuideKind.g3600,
+        GuideKind.g2400,
+        GuideKind.g1200,
+        GuideKind.g600,
+      ]) {
+        modes.add((
+          label: kind.id,
+          icon: Icons.horizontal_rule,
+          selected: widget.guideKind == kind,
+          onTap: () => widget.onGuideKind(kind),
+          accent: guideKindColor(kind),
+        ));
+      }
+    } else {
+      modes.add((
+        label: 'Плиты',
+        icon: Icons.crop_square,
+        selected: widget.showTileDims,
+        onTap: widget.onToggleTileDims,
+        accent: null,
+      ));
+      modes.add((
+        label: 'Стены',
+        icon: Icons.border_outer,
+        selected: widget.showWallDims,
+        onTap: widget.onToggleWallDims,
+        accent: null,
+      ));
+    }
+    return modes;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items();
+    final hover = _hoverIndex;
+
+    // Equal-width column, no solid panel behind the chips.
+    return IntrinsicWidth(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            if (i > 0) const SizedBox(height: 6),
+            _HoverFilterChip(
+              label: items[i].label,
+              icon: items[i].icon,
+              selected: items[i].selected,
+              accent: items[i].accent,
+              hovered: hover == i,
+              neighborPush: hover == null
+                  ? 0
+                  : (i - hover).clamp(-2, 2).toDouble() * 3.5,
+              onHover: (v) => setState(() => _hoverIndex = v ? i : null),
+              onTap: items[i].onTap,
+            ),
+          ],
         ],
       ),
-    ),
+    );
+  }
+}
+
+class _HoverFilterChip extends StatelessWidget {
+  const _HoverFilterChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.hovered,
+    required this.neighborPush,
+    required this.onHover,
+    required this.onTap,
+    this.accent,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final bool hovered;
+  final double neighborPush;
+  final ValueChanged<bool> onHover;
+  final VoidCallback onTap;
+  final Color? accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final scale = hovered ? 1.06 : 1.0;
+    final bg = selected
+        ? (accent?.withValues(alpha: 0.28) ?? scheme.primaryContainer)
+        : scheme.surface.withValues(alpha: 0.82);
+    final side = BorderSide(
+      color: selected
+          ? (accent ?? scheme.primary).withValues(alpha: 0.45)
+          : scheme.outlineVariant.withValues(alpha: 0.55),
+    );
+
+    return MouseRegion(
+      onEnter: (_) => onHover(true),
+      onExit: (_) => onHover(false),
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        offset: Offset(0, neighborPush / 48),
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          scale: scale,
+          child: Material(
+            color: bg,
+            elevation: hovered ? 2 : 0,
+            shadowColor: Colors.black26,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+              side: side,
+            ),
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      icon,
+                      size: 16,
+                      color: accent ??
+                          (selected
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w500,
+                          color: selected
+                              ? (accent ?? scheme.onPrimaryContainer)
+                              : scheme.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

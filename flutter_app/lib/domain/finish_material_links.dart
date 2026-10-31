@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'finish_model.dart';
 import 'floor_covering.dart';
 import 'surface_prep_layers.dart';
+import 'sync_revisions.dart';
 
 /// Optional purchase line tied to a finish / prep layer (or floor covering).
 class FinishMaterialLink {
@@ -145,7 +146,7 @@ Future<void> saveMountKits(List<FinishMountKit> kits) async {
 }
 
 Future<List<FinishMountKit>> upsertMountKit(FinishMountKit kit) async {
-  final list = await loadMountKits();
+  final list = [...await loadMountKits()];
   final i = list.indexWhere((k) => k.id == kit.id);
   if (i >= 0) {
     list[i] = kit;
@@ -153,17 +154,67 @@ Future<List<FinishMountKit>> upsertMountKit(FinishMountKit kit) async {
     list.add(kit);
   }
   await saveMountKits(list);
+  await SyncRevisions.touch(SyncRevisions.kitKey(kit.id));
+  await SyncRevisions.touch(SyncRevisions.kitKey(kit.name));
   return list;
 }
 
 Future<List<FinishMountKit>> deleteMountKit(String id) async {
-  final list = await loadMountKits();
-  list.removeWhere((k) => k.id == id);
+  final list = [...await loadMountKits()]..removeWhere((k) => k.id == id);
   await saveMountKits(list);
   return list;
 }
 
 String newMountKitId() => 'kit_${DateTime.now().millisecondsSinceEpoch}';
+
+/// Inbox / sync payload for one mount kit.
+Map<String, dynamic> buildMountKitSharePayload(
+  FinishMountKit kit, {
+  String? fromOwner,
+}) {
+  return {
+    'stub': false,
+    'kind': 'kit',
+    'from_owner': fromOwner,
+    'kit_id': kit.id,
+    'kit_name': kit.name,
+    'section': kit.section,
+    'layer_kind': kit.layerKind,
+    'item_count': kit.items.length,
+    'items_preview': [
+      for (final m in kit.items)
+        {
+          'name': m.productName.isNotEmpty ? m.productName : m.itemKey,
+          'qty': m.qtyPerUnit,
+          'unit': m.unit,
+        },
+    ],
+    'snapshot': {
+      'kit': kit.toJson(),
+    },
+  };
+}
+
+/// Import kit from share payload. Always creates a local copy (new id).
+Future<FinishMountKit> applyMountKitSharePayload(
+  Map<String, dynamic> payload,
+) async {
+  final snapshot = payload['snapshot'];
+  if (snapshot is! Map) {
+    throw StateError('В сообщении нет снимка комплекта');
+  }
+  final raw = snapshot['kit'];
+  if (raw is! Map) {
+    throw StateError('Снимок комплекта пуст');
+  }
+  final parsed = FinishMountKit.fromJson(Map<String, dynamic>.from(raw));
+  if (parsed.items.isEmpty) {
+    throw StateError('В комплекте нет позиций');
+  }
+  final local = parsed.copyWith(id: newMountKitId());
+  await upsertMountKit(local);
+  return local;
+}
 
 String mountKitSectionLabel(String section) => switch (section) {
       'walls' => 'Стены',

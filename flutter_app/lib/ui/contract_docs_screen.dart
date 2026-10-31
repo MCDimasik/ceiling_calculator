@@ -19,6 +19,7 @@ import '../domain/models.dart';
 import '../domain/money_format.dart';
 import '../domain/official_form_export.dart';
 import '../domain/primary_supplier.dart';
+import '../domain/project_documents_vault.dart';
 import '../domain/project_export.dart';
 import '../domain/room_finish_areas.dart';
 import '../domain/work_rates_catalog.dart';
@@ -763,6 +764,41 @@ class ContractDocsScreenState extends State<ContractDocsScreen> {
     return linesTotal(lines);
   }
 
+  DocumentVaultCategory _vaultCategoryForFilename(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.contains('ks3') || lower.contains('кс-3') || lower.contains('кс3')) {
+      return DocumentVaultCategory.ks3;
+    }
+    if (lower.contains('ks2') || lower.contains('кс-2') || lower.contains('кс2')) {
+      return DocumentVaultCategory.ks2;
+    }
+    if (lower.contains('act') || lower.contains('акт')) {
+      return DocumentVaultCategory.act;
+    }
+    if (lower.contains('kp') ||
+        lower.contains('кп') ||
+        lower.contains('proposal') ||
+        lower.contains('smeta') ||
+        lower.contains('смет')) {
+      return DocumentVaultCategory.kp;
+    }
+    return DocumentVaultCategory.other;
+  }
+
+  Future<void> _registerSharedExport(String path, String filename) async {
+    final project = _project;
+    if (project?.id == null) return;
+    await registerExportInVault(
+      projects: AppScope.of(context).projects,
+      project: project!,
+      category: _vaultCategoryForFilename(filename),
+      displayName: filename,
+      sourcePath: path,
+    );
+    _doc.vault =
+        ProjectDocumentation.fromJson(project.documentationJson).vault;
+  }
+
   Future<void> _shareBytes(Uint8List bytes, String filename) async {
     final dir = await getTemporaryDirectory();
     final file = File(p.join(dir.path, filename));
@@ -770,6 +806,7 @@ class ContractDocsScreenState extends State<ContractDocsScreen> {
     await SharePlus.instance.share(
       ShareParams(files: [XFile(file.path)], subject: filename),
     );
+    await _registerSharedExport(file.path, filename);
   }
 
   Future<void> _shareText(String text, String filename) async {
@@ -779,6 +816,7 @@ class ContractDocsScreenState extends State<ContractDocsScreen> {
     await SharePlus.instance.share(
       ShareParams(files: [XFile(file.path)], subject: filename),
     );
+    await _registerSharedExport(file.path, filename);
   }
 
   Future<void> _exportProposal() async {

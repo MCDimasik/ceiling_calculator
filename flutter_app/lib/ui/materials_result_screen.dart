@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../app_scope.dart';
 import '../domain/ceiling_grid.dart';
 import '../domain/finish_vedomost.dart';
+import '../domain/local_user_role.dart';
 import '../domain/cost_calculator.dart';
 import '../domain/finish_model.dart';
 import '../domain/materials_calculator.dart';
@@ -27,6 +28,16 @@ import 'room_navigation.dart';
 import 'widgets/floor_pager_chip.dart';
 
 enum _OverrideConflictAction { overwriteAll, exceptOverrides }
+
+/// Project-level materials BOM scope.
+enum _MaterialsScope {
+  /// Rooms on the selected floor only (default). Writes room overrides.
+  floor,
+  /// Entire project. Writes project defaults.
+  project,
+  /// Single room. Writes that room's override.
+  room,
+}
 
 class MaterialsResultScreen extends StatefulWidget {
   const MaterialsResultScreen({
@@ -57,7 +68,7 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
   String _susp = 'Подвес 0,5';
   String _cell = '50x50';
   bool _override = false;
-  bool _scopeAllRooms = true;
+  _MaterialsScope _scopeMode = _MaterialsScope.floor;
   int? _scopedRoomId;
   ProjectFloor? _selectedFloor;
 
@@ -101,8 +112,9 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
         }
       }
       if (project != null && widget.roomId == null) {
-        _scopeAllRooms = true;
+        _scopeMode = _MaterialsScope.floor;
         _scopedRoomId = null;
+        _loadFloorConfig();
       }
       if (room != null && project != null) {
         final cfg = roomEffectiveConfig(room, project);
@@ -110,10 +122,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
         _susp = cfg.$2;
         _cell = cfg.$3;
         _override = room.materialsOverride;
-      } else if (project != null) {
-        _ceiling = project.materialsCeiling ?? 'Армстронг';
-        _susp = project.materialsSusp ?? 'Подвес 0,5';
-        _cell = project.materialsCell ?? '50x50';
+      } else if (project != null && widget.roomId == null) {
+        // Floor/project config already applied above when needed.
       }
       _recalc();
       _loading = false;
@@ -127,10 +137,20 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
 
   bool get _isProjectLevel => widget.roomId == null;
 
-  bool get _isAllRoomsScope => _isProjectLevel && _scopeAllRooms;
+  bool get _isMultiRoomScope =>
+      _isProjectLevel &&
+      (_scopeMode == _MaterialsScope.floor ||
+          _scopeMode == _MaterialsScope.project);
+
+  bool get _isProjectWideScope =>
+      _isProjectLevel && _scopeMode == _MaterialsScope.project;
+
+  bool get _isFloorScope =>
+      _isProjectLevel && _scopeMode == _MaterialsScope.floor;
 
   Room? get _scopedRoom {
-    if (!_isProjectLevel || _scopeAllRooms || _scopedRoomId == null) return null;
+    if (!_isProjectLevel || _scopeMode != _MaterialsScope.room) return null;
+    if (_scopedRoomId == null) return null;
     for (final r in _project?.rooms ?? const <Room>[]) {
       if (r.id == _scopedRoomId) return r;
     }
@@ -139,7 +159,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
 
   Room? get _activeRoom => _room ?? _scopedRoom;
 
-  Iterable<Room> get _selectableRooms {
+  /// Rooms on the selected floor page (for floor scope and picker lists).
+  Iterable<Room> get _floorRooms {
     final project = _project;
     if (project == null) return const [];
     final base = roomsForPagerFloor(
@@ -153,12 +174,30 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
     return base.where((r) => r.id != null);
   }
 
-  List<int> get _allRoomIds => [
-        for (final r in _selectableRooms) r.id!,
+  Iterable<Room> get _scopeRooms {
+    final project = _project;
+    if (project == null) return const [];
+    if (!_isProjectLevel) {
+      final r = _room;
+      return r != null && r.id != null ? [r] : const [];
+    }
+    switch (_scopeMode) {
+      case _MaterialsScope.room:
+        final r = _scopedRoom;
+        return r != null ? [r] : const [];
+      case _MaterialsScope.floor:
+        return _floorRooms;
+      case _MaterialsScope.project:
+        return project.rooms.where((r) => r.id != null);
+    }
+  }
+
+  List<int> get _scopeRoomIds => [
+        for (final r in _scopeRooms) r.id!,
       ];
 
-  bool get _anyRoomOverride =>
-      _selectableRooms.any((r) => r.materialsOverride);
+  bool get _anyScopeOverride =>
+      _scopeRooms.any((r) => r.materialsOverride);
 
   void _loadProjectConfig() {
     final project = _project;
@@ -167,6 +206,22 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
     _susp = project.materialsSusp ?? 'Подвес 0,5';
     _cell = project.materialsCell ?? '50x50';
     _override = false;
+  }
+
+  void _loadFloorConfig() {
+    final project = _project;
+    if (project == null) return;
+    final rooms = _floorRooms.toList();
+    final overridden = rooms.where((r) => r.materialsOverride).toList();
+    if (overridden.isNotEmpty) {
+      final cfg = roomEffectiveConfig(overridden.first, project);
+      _ceiling = cfg.$1;
+      _susp = cfg.$2;
+      _cell = cfg.$3;
+      _override = true;
+      return;
+    }
+    _loadProjectConfig();
   }
 
   void _loadRoomConfig(Room room) {
@@ -190,7 +245,7 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
     final activeRoom = _activeRoom;
     final finishMode = widget.calcMode == MaterialsCalcMode.finish;
 
-    if (activeRoom != null) {
+    if (activeRoom != null && !_isMultiRoomScope) {
       activeRoom
         ..materialsOverride = _override
         ..materialsCeiling = _ceiling
@@ -207,18 +262,17 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
       return;
     }
 
-    project
-      ..materialsCeiling = _ceiling
-      ..materialsSusp = _susp
-      ..materialsCell = _cell;
+    // Multi-room (floor / project): pass UI config for aggregation only.
+    // Do not mutate project.materials* here — that leaked across floors.
+    final ids = _scopeRoomIds;
     final (totals, _, _) = aggregateCeilingTotals(
       project,
-      roomIds: _allRoomIds,
+      roomIds: ids,
       ui: ui,
     );
     _ceilingResult = totals;
     _finishLines = finishMode
-        ? aggregateFinishVedomostLines(project, roomIds: _allRoomIds)
+        ? aggregateFinishVedomostLines(project, roomIds: ids)
         : [];
   }
 
@@ -227,26 +281,58 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
     if (project == null) return;
     final repo = AppScope.of(context).projects;
     final activeRoom = _activeRoom;
-    if (activeRoom != null) {
+
+    if (activeRoom != null && !_isMultiRoomScope) {
+      final forceOverride = _isProjectLevel && _scopeMode == _MaterialsScope.room
+          ? true
+          : _override;
       await repo.updateRoomMaterials(
         activeRoom.id!,
-        override: _override,
+        override: forceOverride,
         ceiling: _ceiling,
         susp: _susp,
         cell: _cell,
       );
       activeRoom
-        ..materialsOverride = _override
+        ..materialsOverride = forceOverride
         ..materialsCeiling = _ceiling
         ..materialsSusp = _susp
         ..materialsCell = _cell;
-    } else {
+      _override = forceOverride;
+      return;
+    }
+
+    if (_isFloorScope) {
+      // Write each room on the floor with override — leave project defaults alone.
+      for (final room in _floorRooms) {
+        await repo.updateRoomMaterials(
+          room.id!,
+          override: true,
+          ceiling: _ceiling,
+          susp: _susp,
+          cell: _cell,
+        );
+        room
+          ..materialsOverride = true
+          ..materialsCeiling = _ceiling
+          ..materialsSusp = _susp
+          ..materialsCell = _cell;
+      }
+      _override = true;
+      return;
+    }
+
+    if (_isProjectWideScope) {
       await repo.updateProjectMaterials(
         project.id!,
         ceiling: _ceiling,
         susp: _susp,
         cell: _cell,
       );
+      project
+        ..materialsCeiling = _ceiling
+        ..materialsSusp = _susp
+        ..materialsCell = _cell;
     }
   }
 
@@ -287,7 +373,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
   }
 
   Future<void> _applyConfigChange(void Function() mutate) async {
-    if (!_isAllRoomsScope) {
+    // Floor / single room: always persist as room overrides (no project defaults).
+    if (!_isProjectWideScope) {
       setState(() {
         mutate();
         if (_activeRoom != null && !_override) {
@@ -300,7 +387,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
       return;
     }
 
-    final overridden = _selectableRooms.where((r) => r.materialsOverride).toList();
+    final overridden =
+        _scopeRooms.where((r) => r.materialsOverride).toList();
     if (overridden.isNotEmpty) {
       final action = await _askOverrideConflict(overridden.length);
       if (!mounted || action == null) return;
@@ -440,8 +528,9 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
       return;
     }
 
+    final floors = _project?.floors ?? const <ProjectFloor>[];
     final rooms =
-        _selectableRooms.where((r) => r.hasLayout && r.id != null).toList();
+        _scopeRooms.where((r) => r.hasLayout && r.id != null).toList();
     if (rooms.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Нет помещений с чертежом')),
@@ -466,7 +555,9 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
               ),
               for (final room in rooms)
                 ListTile(
-                  title: Text(room.name),
+                  title: Text(
+                    roomNameWithFloor(room: room, floors: floors),
+                  ),
                   subtitle: Text(
                     'S=${MaterialsCalculator.roomAreaM2(room.walls).toStringAsFixed(1)} м²',
                   ),
@@ -515,27 +606,45 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
   }
 
   String get _scopeLabel {
-    if (_isAllRoomsScope) return 'Все помещения';
-    final room = _scopedRoom;
-    return room?.name ?? 'Помещение';
+    final floors = _project?.floors ?? const <ProjectFloor>[];
+    switch (_scopeMode) {
+      case _MaterialsScope.floor:
+        final label = _selectedFloor?.pagerLabel;
+        final n = _floorRooms.length;
+        if (label != null && label.isNotEmpty) return '$label · $n помещ.';
+        return 'Этаж · $n помещ.';
+      case _MaterialsScope.project:
+        return 'Объект · ${_project?.rooms.where((r) => r.id != null).length ?? 0} помещ.';
+      case _MaterialsScope.room:
+        final room = _scopedRoom;
+        if (room == null) return 'Комната';
+        return roomNameWithFloor(room: room, floors: floors);
+    }
   }
 
-  void _selectRoomScope({required bool allRooms, int? roomId}) {
+  void _selectScope(_MaterialsScope mode, {int? roomId}) {
     setState(() {
-      _scopeAllRooms = allRooms;
-      _scopedRoomId = roomId;
-      if (allRooms) {
-        _loadProjectConfig();
-      } else if (roomId != null) {
-        final room = _scopedRoom;
-        if (room != null) _loadRoomConfig(room);
+      _scopeMode = mode;
+      _scopedRoomId = mode == _MaterialsScope.room ? roomId : null;
+      switch (mode) {
+        case _MaterialsScope.project:
+          _loadProjectConfig();
+        case _MaterialsScope.floor:
+          _loadFloorConfig();
+        case _MaterialsScope.room:
+          final room = _scopedRoom;
+          if (room != null) _loadRoomConfig(room);
       }
       _recalc();
     });
   }
 
   Future<void> _openRoomScopePicker() async {
-    final rooms = _selectableRooms.toList();
+    final floors = _project?.floors ?? const <ProjectFloor>[];
+    final floorRooms = _floorRooms.toList();
+    // Room list: all project rooms so user can pick any; floor mode stays separate.
+    final allRooms =
+        (_project?.rooms ?? const <Room>[]).where((r) => r.id != null).toList();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -556,7 +665,7 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
-                    'Выбор помещений',
+                    'Область расчёта',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
@@ -564,29 +673,59 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                   leading: CircleAvatar(
                     backgroundColor: theme.colorScheme.primaryContainer,
                     child: Icon(
-                      Icons.apartment,
+                      Icons.layers_outlined,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                   ),
-                  title: const Text('Все помещения'),
-                  subtitle: _anyRoomOverride
-                      ? const Text('Есть помещения с индивидуальными настройками')
-                      : Text('Сумма по ${rooms.length} помещ.'),
-                  trailing: _isAllRoomsScope
+                  title: const Text('Этаж'),
+                  subtitle: Text(
+                    _anyScopeOverride && _isFloorScope
+                        ? 'Есть индивидуальные настройки · ${floorRooms.length} помещ.'
+                        : 'Только текущий этаж · ${floorRooms.length} помещ.',
+                  ),
+                  trailing: _isFloorScope
                       ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
                       : null,
-                  selected: _isAllRoomsScope,
+                  selected: _isFloorScope,
                   onTap: () {
                     Navigator.pop(ctx);
-                    _selectRoomScope(allRooms: true);
+                    _selectScope(_MaterialsScope.floor);
+                  },
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: theme.colorScheme.secondaryContainer,
+                    child: Icon(
+                      Icons.apartment,
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                  title: const Text('Объект'),
+                  subtitle: Text(
+                    'Все помещения · ${allRooms.length} · настройки объекта',
+                  ),
+                  trailing: _isProjectWideScope
+                      ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
+                      : null,
+                  selected: _isProjectWideScope,
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _selectScope(_MaterialsScope.project);
                   },
                 ),
                 const Divider(height: 1),
-                for (final room in rooms)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(
+                    'Комната',
+                    style: theme.textTheme.labelLarge,
+                  ),
+                ),
+                for (final room in allRooms)
                   Builder(
                     builder: (_) {
-                      final selected =
-                          !_isAllRoomsScope && _scopedRoomId == room.id;
+                      final selected = _scopeMode == _MaterialsScope.room &&
+                          _scopedRoomId == room.id;
                       return ListTile(
                         leading: CircleAvatar(
                           child: Text(
@@ -595,7 +734,9 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                                 : '?',
                           ),
                         ),
-                        title: Text(room.name),
+                        title: Text(
+                          roomNameWithFloor(room: room, floors: floors),
+                        ),
                         subtitle: Text(
                           room.materialsOverride
                               ? 'Индивидуальные настройки потолка'
@@ -626,7 +767,7 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                         onTap: () {
                           if (room.id == null) return;
                           Navigator.pop(ctx);
-                          _selectRoomScope(allRooms: false, roomId: room.id);
+                          _selectScope(_MaterialsScope.room, roomId: room.id);
                         },
                       );
                     },
@@ -652,9 +793,15 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
         child: Row(
           children: [
             Badge(
-              isLabelVisible: _isAllRoomsScope && _anyRoomOverride,
+              isLabelVisible: _isMultiRoomScope && _anyScopeOverride,
               smallSize: 8,
-              child: const Icon(Icons.meeting_room_outlined),
+              child: Icon(
+                _scopeMode == _MaterialsScope.project
+                    ? Icons.apartment
+                    : _scopeMode == _MaterialsScope.floor
+                        ? Icons.layers_outlined
+                        : Icons.meeting_room_outlined,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -663,7 +810,11 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Выбор помещений',
+                    switch (_scopeMode) {
+                      _MaterialsScope.floor => 'Этаж',
+                      _MaterialsScope.project => 'Объект',
+                      _MaterialsScope.room => 'Комната',
+                    },
                     style: theme.textTheme.labelLarge,
                   ),
                   const SizedBox(height: 2),
@@ -685,24 +836,18 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
   }
 
   double _selectedProjectAreaM2() {
-    final project = _project;
-    if (project == null) return 0;
     var area = 0.0;
-    for (final room in project.rooms) {
+    for (final room in _scopeRooms) {
       if (!room.hasLayout) continue;
-      if (!_isAllRoomsScope && room.id != _scopedRoomId) continue;
       area += MaterialsCalculator.roomAreaM2(room.walls);
     }
     return area;
   }
 
   double _selectedProjectPerimeterM() {
-    final project = _project;
-    if (project == null) return 0;
     var peri = 0.0;
-    for (final room in project.rooms) {
+    for (final room in _scopeRooms) {
       if (!room.hasLayout) continue;
-      if (!_isAllRoomsScope && room.id != _scopedRoomId) continue;
       peri += MaterialsCalculator.roomPerimeterCm(room.walls) / 100;
     }
     return peri;
@@ -812,6 +957,7 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                         selected: _selectedFloor,
                         onSelected: (f) => setState(() {
                           _selectedFloor = f;
+                          if (_isFloorScope) _loadFloorConfig();
                           _recalc();
                         }),
                       ),
@@ -820,13 +966,16 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                         child: Text(
-                          finishMode
-                              ? (_isAllRoomsScope
-                                  ? 'Материалы отделки · по этажу/объекту'
-                                  : 'Материалы отделки · помещение')
-                              : (_isAllRoomsScope
-                                  ? 'Материалы потолка · по этажу/объекту'
-                                  : 'Материалы потолка · помещение'),
+                          () {
+                            final kind = finishMode
+                                ? 'Материалы отделки'
+                                : 'Материалы потолка';
+                            return switch (_scopeMode) {
+                              _MaterialsScope.floor => '$kind · этаж',
+                              _MaterialsScope.project => '$kind · объект',
+                              _MaterialsScope.room => '$kind · комната',
+                            };
+                          }(),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
@@ -843,7 +992,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
           },
         ),
         actions: [
-          if (_room != null)
+          if (_room != null &&
+              AppScope.of(context).user.effectiveRole.canFinishVedomost)
             TextButton(
               onPressed: () async {
                 await _persistSilent();
@@ -859,7 +1009,8 @@ class _MaterialsResultScreenState extends State<MaterialsResultScreen> {
               },
               child: const Text('Ведомость'),
             ),
-          if (_room != null)
+          if (_room != null &&
+              AppScope.of(context).user.effectiveRole.canDocumentation)
             TextButton(
               onPressed: () async {
                 await _persistSilent();

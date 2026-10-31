@@ -5,11 +5,17 @@ import '../domain/finish_model.dart';
 import '../domain/materials_calculator.dart';
 import '../domain/models.dart';
 import '../domain/project_floors.dart';
-import '../domain/project_transfer.dart';
 import '../domain/room_finish_areas.dart';
 import '../domain/special_space.dart';
+import 'adaptive_layout.dart';
+import 'desktop_cascade.dart';
 import 'documentation_flow_screens.dart';
+import 'widgets/cascade_pane_toolbar.dart';
+import 'widgets/desktop_room_actions.dart';
+import 'widgets/room_floor_fab.dart';
 import 'finish_project_screen.dart';
+import 'finish_room_screen.dart';
+import 'in_app_share_flow.dart';
 import 'layout_screen.dart';
 import 'master_plan_screen.dart';
 import 'project_dashboard_screen.dart';
@@ -23,7 +29,6 @@ import 'widgets/batch_create_rooms_dialog.dart';
 import 'widgets/floor_pager_chip.dart';
 import 'widgets/long_press_action_tile.dart';
 import 'widgets/numeric_input.dart';
-import 'widgets/room_floor_fab.dart';
 import 'widgets/screen_scaffold.dart';
 import 'widgets/transparent_reorder_proxy.dart';
 
@@ -32,10 +37,16 @@ class RoomsScreen extends StatefulWidget {
     super.key,
     required this.projectId,
     this.module = AppModule.ceilingLayout,
+    /// Right pane of desktop master–detail (no back-to-projects).
+    this.embeddedInSplit = false,
+    /// Desktop cascade: open layout / сводка in center pane.
+    this.cascadeMode = false,
   });
 
   final int projectId;
   final AppModule module;
+  final bool embeddedInSplit;
+  final bool cascadeMode;
 
   @override
   State<RoomsScreen> createState() => _RoomsScreenState();
@@ -47,6 +58,28 @@ class _RoomsScreenState extends State<RoomsScreen> {
   String? _error;
   bool _started = false;
   ProjectFloor? _selectedFloor;
+  final Set<int> _selectedRoomIds = {};
+
+  bool get _selectionMode => _selectedRoomIds.isNotEmpty;
+
+  void _toggleRoomSelected(int? id) {
+    if (id == null) return;
+    setState(() {
+      if (!_selectedRoomIds.remove(id)) {
+        _selectedRoomIds.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(() => _selectedRoomIds.clear());
+
+  List<Room> _selectedRooms() {
+    final all = _project?.rooms ?? const <Room>[];
+    return [
+      for (final r in all)
+        if (r.id != null && _selectedRoomIds.contains(r.id)) r,
+    ];
+  }
 
   @override
   void didChangeDependencies() {
@@ -114,8 +147,27 @@ class _RoomsScreenState extends State<RoomsScreen> {
       name,
       floorId: floorId,
     );
-    if (!context.mounted) return;
-    if (widget.module == AppModule.finish && room.id != null) {
+    if (!context.mounted || room.id == null) return;
+    final cascade = widget.cascadeMode
+        ? DesktopCascadeHost.maybeOf(context)
+        : null;
+    if (cascade != null) {
+      final editor = RoomEditorScreen(
+        projectId: widget.projectId,
+        roomId: room.id!,
+        module: widget.module == AppModule.finish
+            ? AppModule.finish
+            : AppModule.ceilingLayout,
+      );
+      cascade.openDetail(
+        editor,
+        title: room.name,
+        detailId: 'room:${room.id}',
+      );
+      await _reload();
+      return;
+    }
+    if (widget.module == AppModule.finish) {
       await openFinishRoomCanvas(
         context,
         projectId: widget.projectId,
@@ -432,9 +484,71 @@ class _RoomsScreenState extends State<RoomsScreen> {
   }
 
   Future<void> _shareRoom(Room room) async {
-    final project = await AppScope.of(context).projects.getProject(widget.projectId);
+    final project =
+        await AppScope.of(context).projects.getProject(widget.projectId);
     if (project == null || !mounted) return;
-    await shareProject(project, rooms: [room]);
+    await shareProjectOrRooms(this.context, project: project, rooms: [room]);
+  }
+
+  Future<void> _shareSelectedRooms() async {
+    final rooms = _selectedRooms();
+    if (rooms.isEmpty) return;
+    final project =
+        await AppScope.of(context).projects.getProject(widget.projectId);
+    if (project == null || !mounted) return;
+    await shareProjectOrRooms(this.context, project: project, rooms: rooms);
+  }
+
+  Future<void> _duplicateSelectedRooms() async {
+    final rooms = _selectedRooms();
+    if (rooms.isEmpty) return;
+    final repo = AppScope.of(context).projects;
+    var n = 0;
+    for (final room in rooms) {
+      if (room.specialSpace?.kind == SpecialSpaceKind.stairwell) continue;
+      final name = '${room.name} (копия)';
+      await repo.duplicateRoom(widget.projectId, room, name);
+      n++;
+    }
+    if (!mounted) return;
+    _clearSelection();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(n == 0 ? 'Нечего копировать' : 'Скопировано: $n')),
+    );
+    await _reload();
+  }
+
+  Future<void> _deleteSelectedRooms() async {
+    final rooms = _selectedRooms();
+    if (rooms.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Удалить помещения (${rooms.length})?'),
+        content: Text(
+          rooms.map((r) => r.name).join(', '),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final repo = AppScope.of(context).projects;
+    for (final room in rooms) {
+      if (room.id == null) continue;
+      await repo.deleteRoom(widget.projectId, room.id!);
+    }
+    if (!mounted) return;
+    _clearSelection();
+    await _reload();
   }
 
   Future<void> _duplicateRoom(Room room) async {
@@ -465,6 +579,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
 
   Future<void> _openRoom(Room room) async {
     if (room.id == null) return;
+    final cascade = widget.cascadeMode
+        ? DesktopCascadeHost.maybeOf(context)
+        : null;
+
     if (widget.module == AppModule.documentation) {
       await openDocumentationRoom(
         context,
@@ -484,24 +602,53 @@ class _RoomsScreenState extends State<RoomsScreen> {
         );
         return;
       }
+      final page = room.hasLayout
+          ? LayoutScreen(
+              projectId: widget.projectId,
+              roomId: room.id!,
+            )
+          : RoomEditorScreen(
+              projectId: widget.projectId,
+              roomId: room.id!,
+            );
+      if (cascade != null) {
+        cascade.openDetail(
+          page,
+          title: room.name,
+          detailId: 'room:${room.id}',
+        );
+        return;
+      }
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => room.hasLayout
-              ? LayoutScreen(
-                  projectId: widget.projectId,
-                  roomId: room.id!,
-                )
-              : RoomEditorScreen(
-                  projectId: widget.projectId,
-                  roomId: room.id!,
-                ),
-        ),
+        MaterialPageRoute(builder: (_) => page),
       );
       await _reload();
       return;
     }
     // Finish: special space → volume/stair editor; else room tabs.
     if (widget.module == AppModule.finish) {
+      if (cascade != null) {
+        if (room.isSpecialSpace) {
+          cascade.openDetail(
+            SpecialSpaceScreen(
+              projectId: widget.projectId,
+              roomId: room.id!,
+            ),
+            title: room.name,
+            detailId: 'room:${room.id}',
+          );
+        } else {
+          cascade.openDetail(
+            FinishRoomScreen(
+              projectId: widget.projectId,
+              roomId: room.id!,
+            ),
+            title: room.name,
+            detailId: 'room:${room.id}',
+          );
+        }
+        return;
+      }
       if (room.isSpecialSpace) {
         await Navigator.of(context).push(
           MaterialPageRoute(
@@ -552,7 +699,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
         .where((r) => r.hasLayout)
         .fold<double>(
             0, (a, r) => a + MaterialsCalculator.roomPerimeterCm(r.walls) / 100);
-    final title = _project == null
+    final metrics = _project == null
+        ? null
+        : wallsExtra > 0.05
+            ? 'пол ${area.toStringAsFixed(1)} м² · ЛК ${wallsExtra.toStringAsFixed(1)} · '
+                'P ${perimeter.toStringAsFixed(1)} м'
+            : '${area.toStringAsFixed(1)} м² · P ${perimeter.toStringAsFixed(1)} м';
+    final phoneTitle = _project == null
         ? 'Комнаты'
         : wallsExtra > 0.05
             ? '${_project!.name} · пол ${area.toStringAsFixed(2)} м²'
@@ -560,61 +713,179 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 'P ${perimeter.toStringAsFixed(2)} м'
             : '${_project!.name} · ${area.toStringAsFixed(2)} м² · '
                 'P ${perimeter.toStringAsFixed(2)} м';
-    return ScreenScaffold(
-      dimOpacity: widget.module == AppModule.finish ? 0.58 : 0.45,
-      appBar: AppBar(
-        title: Text(title),
-        actions: [
-          if (widget.module == AppModule.documentation)
-            IconButton(
-              tooltip: 'Настройки документации',
-              onPressed: _project == null
-                  ? null
-                  : () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => DocumentationProjectSettingsScreen(
-                            projectId: widget.projectId,
-                          ),
-                        ),
-                      );
-                      await _reload();
-                    },
-              icon: const Icon(Icons.settings_outlined),
-            ),
+
+    final roomActions = <Widget>[
+      if (!_selectionMode) ...[
+        if (widget.module == AppModule.documentation)
           IconButton(
-            tooltip: 'План объекта',
+            tooltip: 'Настройки документации',
+            visualDensity: VisualDensity.compact,
             onPressed: _project == null
                 ? null
                 : () async {
                     await Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => MasterPlanScreen(projectId: widget.projectId),
+                      MaterialPageRoute(
+                        builder: (_) => DocumentationProjectSettingsScreen(
+                          projectId: widget.projectId,
+                        ),
                       ),
                     );
                     await _reload();
                   },
-            icon: const Icon(Icons.apartment_outlined),
+            icon: const Icon(Icons.settings_outlined),
           ),
-          IconButton(
-            tooltip: 'Обновить',
-            onPressed: _loading ? null : _reload,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
+        IconButton(
+          tooltip: 'План объекта',
+          visualDensity: VisualDensity.compact,
+          onPressed: _project == null
+              ? null
+              : () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          MasterPlanScreen(projectId: widget.projectId),
+                    ),
+                  );
+                  await _reload();
+                },
+          icon: const Icon(Icons.apartment_outlined),
+        ),
+        IconButton(
+          tooltip: 'Обновить',
+          visualDensity: VisualDensity.compact,
+          onPressed: _loading ? null : _reload,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ];
+
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectionMode) _clearSelection();
+      },
+      child: ScreenScaffold(
+        constrainDesktopWidth: !widget.embeddedInSplit,
+        embedInParentBackground: widget.cascadeMode,
+        dimOpacity: widget.module == AppModule.finish ? 0.58 : 0.45,
+        appBar: widget.cascadeMode
+            ? CascadePaneToolbar(
+                title: _selectionMode
+                    ? 'Выбрано: ${_selectedRoomIds.length}'
+                    : (_project?.name ?? 'Помещения'),
+                subtitle: _selectionMode ? null : metrics,
+                leading: IconButton(
+                  tooltip: _selectionMode ? 'Снять выбор' : 'К объектам',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _selectionMode
+                      ? _clearSelection
+                      : () => DesktopCascadeHost.maybeOf(context)
+                          ?.clearProject(),
+                  icon: Icon(
+                    _selectionMode ? Icons.close : Icons.arrow_back,
+                    size: 20,
+                  ),
+                ),
+                actions: roomActions,
+              )
+            : AppBar(
+                automaticallyImplyLeading: !widget.embeddedInSplit,
+                leading: _selectionMode
+                    ? IconButton(
+                        tooltip: 'Снять выбор',
+                        onPressed: _clearSelection,
+                        icon: const Icon(Icons.close),
+                      )
+                    : (widget.embeddedInSplit
+                        ? const Icon(Icons.meeting_room_outlined)
+                        : null),
+                title: Text(
+                  _selectionMode
+                      ? 'Выбрано: ${_selectedRoomIds.length}'
+                      : phoneTitle,
+                ),
+                actions: roomActions,
+              ),
+        floatingActionButton: _selectionMode ||
+                _project == null ||
+                widget.cascadeMode
+            ? null
+            : RoomFloorFab(
+                onCreateRoom: _createRoom,
+                onBatchRooms: _batchCreateRooms,
+                onCreateFloor: () => _addFloor(typical: false),
+                onTypicalFloors: () => _addFloor(typical: true),
+                onCreateSpecialSpace: widget.module == AppModule.finish
+                    ? _createSpecialSpace
+                    : null,
+              ),
+        bottomNavigationBar: _selectionMode
+            ? SafeArea(
+                child: Material(
+                  elevation: 8,
+                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextButton.icon(
+                            onPressed: _shareSelectedRooms,
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Поделиться'),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextButton.icon(
+                            onPressed: _duplicateSelectedRooms,
+                            icon: const Icon(Icons.content_copy),
+                            label: const Text('Копия'),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextButton.icon(
+                            onPressed: _deleteSelectedRooms,
+                            style: TextButton.styleFrom(
+                              foregroundColor:
+                                  Theme.of(context).colorScheme.error,
+                            ),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Удалить'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : null,
+        body: widget.cascadeMode &&
+                !_selectionMode &&
+                _project != null
+            ? Stack(
+                children: [
+                  Positioned.fill(child: _buildBody()),
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 10,
+                    child: DesktopRoomActionsBar(
+                      onCreateRoom: _createRoom,
+                      onBatchRooms: _batchCreateRooms,
+                      onCreateFloor: () => _addFloor(typical: false),
+                      onTypicalFloors: () => _addFloor(typical: true),
+                      onCreateSpecialSpace: widget.module == AppModule.finish
+                          ? _createSpecialSpace
+                          : null,
+                    ),
+                  ),
+                ],
+              )
+            : _buildBody(),
       ),
-      floatingActionButton: _project == null
-          ? null
-          : RoomFloorFab(
-              onCreateRoom: _createRoom,
-              onBatchRooms: _batchCreateRooms,
-              onCreateFloor: () => _addFloor(typical: false),
-              onTypicalFloors: () => _addFloor(typical: true),
-              onCreateSpecialSpace: widget.module == AppModule.finish
-                  ? _createSpecialSpace
-                  : null,
-            ),
-      body: _buildBody(),
     );
   }
 
@@ -710,7 +981,12 @@ class _RoomsScreenState extends State<RoomsScreen> {
     return RefreshIndicator(
       onRefresh: _reload,
       child: ReorderableListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
+        padding: EdgeInsets.fromLTRB(
+          widget.cascadeMode ? 12 : 16,
+          12,
+          widget.cascadeMode ? 12 : 16,
+          88,
+        ),
         buildDefaultDragHandles: false,
         proxyDecorator: transparentReorderProxyDecorator,
         itemCount: itemCount == 0 ? 1 : itemCount,
@@ -754,14 +1030,19 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 clipBehavior: Clip.antiAlias,
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
+                  minTileHeight: DesktopMetrics.listTileMinHeight(context),
                   leading: CircleAvatar(
+                    radius: DesktopMetrics.leadingRadius(context),
                     backgroundColor:
                         Theme.of(context).colorScheme.primaryContainer,
                     foregroundColor:
                         Theme.of(context).colorScheme.onPrimaryContainer,
                     child: const Icon(Icons.dashboard_outlined),
                   ),
-                  title: const Text('Сводка объекта'),
+                  title: Text(
+                    'Сводка объекта',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   subtitle: Text(
                     layoutN == 0
                         ? 'Готовность к актам · КП · КС · документы'
@@ -769,13 +1050,23 @@ class _RoomsScreenState extends State<RoomsScreen> {
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
+                    final page = ProjectDashboardScreen(
+                      projectId: widget.projectId,
+                      focusFloorId: _selectedFloor?.id,
+                    );
+                    final host = widget.cascadeMode
+                        ? DesktopCascadeHost.maybeOf(context)
+                        : null;
+                    if (host != null) {
+                      host.openDetail(
+                        page,
+                        title: 'Сводка объекта',
+                        detailId: 'dash:${widget.projectId}',
+                      );
+                      return;
+                    }
                     await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ProjectDashboardScreen(
-                          projectId: widget.projectId,
-                          focusFloorId: _selectedFloor?.id,
-                        ),
-                      ),
+                      MaterialPageRoute(builder: (_) => page),
                     );
                     await _reload();
                   },
@@ -787,14 +1078,19 @@ class _RoomsScreenState extends State<RoomsScreen> {
               clipBehavior: Clip.antiAlias,
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
+                minTileHeight: DesktopMetrics.listTileMinHeight(context),
                 leading: CircleAvatar(
+                  radius: DesktopMetrics.leadingRadius(context),
                   backgroundColor:
                       Theme.of(context).colorScheme.primaryContainer,
                   foregroundColor:
                       Theme.of(context).colorScheme.onPrimaryContainer,
                   child: const Icon(Icons.apartment_outlined),
                 ),
-                title: const Text('Сводка объекта'),
+                title: Text(
+                  'Сводка объекта',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 subtitle: Text(
                   layoutN == 0
                       ? 'Обзор, стены, пол, потолок и другие работы'
@@ -802,12 +1098,22 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () async {
+                  final page = FinishProjectScreen(
+                    projectId: widget.projectId,
+                  );
+                  final host = widget.cascadeMode
+                      ? DesktopCascadeHost.maybeOf(context)
+                      : null;
+                  if (host != null) {
+                    host.openDetail(
+                      page,
+                      title: 'Сводка объекта',
+                      detailId: 'finish:${widget.projectId}',
+                    );
+                    return;
+                  }
                   await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => FinishProjectScreen(
-                        projectId: widget.projectId,
-                      ),
-                    ),
+                    MaterialPageRoute(builder: (_) => page),
                   );
                   await _reload();
                 },
@@ -891,7 +1197,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
             child: LongPressActionTile(
               title: room.specialSpace?.kind == SpecialSpaceKind.stairwell
                   ? '${room.name} · ЛК'
-                  : room.name,
+                  : roomNameWithFloor(
+                      room: room,
+                      floors: _project?.floors ?? const [],
+                    ),
               subtitle: subtitle,
               leading: room.specialSpace?.kind == SpecialSpaceKind.stairwell
                   ? Icon(
@@ -899,17 +1208,30 @@ class _RoomsScreenState extends State<RoomsScreen> {
                       color: Theme.of(context).colorScheme.secondary,
                     )
                   : null,
+              selected: (room.id != null &&
+                      _selectedRoomIds.contains(room.id)) ||
+                  (widget.cascadeMode &&
+                      room.id != null &&
+                      DesktopCascadeHost.maybeOf(context)?.detailId ==
+                          'room:${room.id}'),
+              selectionMode: _selectionMode,
+              onToggleSelect: room.id == null
+                  ? null
+                  : () => _toggleRoomSelected(room.id),
               onOpen: () => _openRoom(room),
               onRename: () => _renameRoom(room),
               onDuplicate: () => _duplicateRoom(room),
               onShare: () => _shareRoom(room),
               onDelete: () => _deleteRoom(room),
               // Guest spanning ЛК: no drag — avoids reshuffling global order by accident.
-              reorderIndex: (_selectedFloor?.id != null &&
-                      room.specialSpace?.kind == SpecialSpaceKind.stairwell &&
-                      room.floorId != _selectedFloor!.id)
+              reorderIndex: _selectionMode
                   ? null
-                  : i,
+                  : ((_selectedFloor?.id != null &&
+                          room.specialSpace?.kind ==
+                              SpecialSpaceKind.stairwell &&
+                          room.floorId != _selectedFloor!.id)
+                      ? null
+                      : i),
             ),
           );
         },

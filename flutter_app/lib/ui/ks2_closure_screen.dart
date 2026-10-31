@@ -21,6 +21,7 @@ import '../domain/models.dart';
 import '../domain/money_format.dart';
 import '../domain/primary_supplier.dart';
 import '../domain/official_form_export.dart';
+import '../domain/project_documents_vault.dart';
 import '../domain/project_export.dart';
 import '../domain/project_floors.dart';
 import '../domain/vedomost_export.dart';
@@ -554,6 +555,17 @@ class Ks2ClosureScreenState extends State<Ks2ClosureScreen>
       exportPath: exportPath,
     );
     await _saveDoc();
+    if (exportPath != null) {
+      await registerExportInVault(
+        projects: AppScope.of(context).projects,
+        project: project,
+        category: DocumentVaultCategory.ks2,
+        displayName: 'КС-2 № $actNumber · $scopeLabel',
+        sourcePath: exportPath,
+      );
+      _doc.vault =
+          ProjectDocumentation.fromJson(project.documentationJson).vault;
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('КС-2 № $actNumber записан в реестр')),
@@ -670,6 +682,17 @@ class Ks2ClosureScreenState extends State<Ks2ClosureScreen>
       subject: 'КС-3 · ${project.name}',
       text: text,
     );
+    if (project.id != null) {
+      await registerExportInVault(
+        projects: AppScope.of(context).projects,
+        project: project,
+        category: DocumentVaultCategory.ks3,
+        displayName: 'КС-3 · ${project.name}',
+        sourcePath: pdfFile.path,
+      );
+      _doc.vault =
+          ProjectDocumentation.fromJson(project.documentationJson).vault;
+    }
   }
 
   Future<void> _cancelAct(Ks2ActRecord act) async {

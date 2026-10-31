@@ -44,8 +44,9 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
   bool _loading = true;
   bool _view3d = false;
   bool _showWalls = true;
+  /// Default: floor on, ceiling off — avoids mistaking the yellow grid for floor tiles.
   bool _showFloor = true;
-  bool _showCeiling = true;
+  bool _showCeiling = false;
   bool _showOpenings = true;
   double _yaw = 0.4;
   double _pitch = 0.55;
@@ -57,6 +58,8 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
   _OvMoveTarget _moveTarget = _OvMoveTarget.none;
   int? _selectedOpeningIndex;
   int? _placingIndex;
+  /// When true, finger pan shifts floor/ceiling layout instead of the camera.
+  bool _fingerDragLayout = false;
 
   @override
   void initState() {
@@ -339,11 +342,33 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
     return joySx * sx + joySy * sy;
   }
 
+  /// Joystick target without long-press: ceiling if visible (or both), else floor.
+  _OvMoveTarget get _autoLayoutTarget {
+    if (_showCeiling) return _OvMoveTarget.ceiling;
+    if (_showFloor) return _OvMoveTarget.floor;
+    return _OvMoveTarget.none;
+  }
+
+  _OvMoveTarget get _effectiveMoveTarget {
+    if (_moveTarget != _OvMoveTarget.none) return _moveTarget;
+    return _autoLayoutTarget;
+  }
+
   Future<void> _nudge(double dx, double dy, {bool finalize = false}) async {
     final room = _room;
     if (room == null) return;
+    final target = _effectiveMoveTarget;
+    if (target == _OvMoveTarget.none && dx == 0 && dy == 0 && !finalize) {
+      return;
+    }
     setState(() {
-      switch (_moveTarget) {
+      // Promote auto target so UI highlights the active plane.
+      if (_moveTarget == _OvMoveTarget.none &&
+          (target == _OvMoveTarget.floor || target == _OvMoveTarget.ceiling) &&
+          (dx != 0 || dy != 0)) {
+        _moveTarget = target;
+      }
+      switch (target) {
         case _OvMoveTarget.opening:
           final i = _selectedOpeningIndex;
           if (i == null) break;
@@ -383,6 +408,21 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
       }
     });
     if (finalize) await _persist();
+  }
+
+  void _fingerPanLayout(Offset deltaPx) {
+    final metrics = _metrics;
+    if (metrics == null || metrics.scale <= 0) return;
+    // Screen +y is down; world +y matches plan. 1 cm steps.
+    final dxCm = deltaPx.dx / metrics.scale;
+    final dyCm = -deltaPx.dy / metrics.scale;
+    // Accumulate to whole cm; small moves ignored until ≥0.5 cm.
+    if (dxCm.abs() < 0.5 && dyCm.abs() < 0.5) return;
+    final sx = dxCm >= 0.5 ? 1.0 : (dxCm <= -0.5 ? -1.0 : 0.0);
+    final sy = dyCm >= 0.5 ? 1.0 : (dyCm <= -0.5 ? -1.0 : 0.0);
+    if (sx == 0 && sy == 0) return;
+    // ignore: discarded_futures
+    _nudge(sx, sy);
   }
 
   /// [local] is in InteractiveViewer child space (already untransformed).
@@ -483,17 +523,23 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
   }
 
   String get _selectionHint {
-    switch (_moveTarget) {
+    switch (_effectiveMoveTarget) {
       case _OvMoveTarget.opening:
         return 'Проём · джойстик двигает вдоль стены · тап — снять выбор';
       case _OvMoveTarget.floor:
-        return 'Пол · джойстик смещает раскладку · тап — снять выбор';
+        return _moveTarget == _OvMoveTarget.none
+            ? 'Пол · джойстик смещает раскладку'
+            : 'Пол · джойстик смещает раскладку · тап — снять выбор';
       case _OvMoveTarget.ceiling:
-        return 'Потолок · джойстик смещает сетку · тап — снять выбор';
+        return _moveTarget == _OvMoveTarget.none
+            ? 'Потолок · джойстик смещает сетку'
+            : 'Потолок · джойстик смещает сетку · тап — снять выбор';
       case _OvMoveTarget.none:
         return _view3d
             ? 'Тяните для поворота · долгое нажатие на проём — выбрать'
-            : 'Долгое нажатие — выбрать · джойстик — сдвинуть';
+            : (_fingerDragLayout
+                ? 'Сдвиг пальцем · раскладка'
+                : 'Джойстик смещает видимую раскладку · долгое — выбрать');
     }
   }
 
@@ -619,7 +665,7 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
               ],
             ),
           ),
-          if (_moveTarget != _OvMoveTarget.none)
+          if (_effectiveMoveTarget != _OvMoveTarget.none || _fingerDragLayout)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
               child: Text(
@@ -706,6 +752,8 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
                               constrained: false,
                               minScale: 0.35,
                               maxScale: 8,
+                              panEnabled: !_fingerDragLayout,
+                              scaleEnabled: !_fingerDragLayout,
                               boundaryMargin: const EdgeInsets.all(280),
                               child: SizedBox(
                                 width: size.width,
@@ -715,6 +763,12 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
                                   onTapUp: (d) => _onTapAt(d.localPosition),
                                   onLongPressStart: (d) =>
                                       _onLongPressAt(d.localPosition),
+                                  onPanUpdate: _fingerDragLayout
+                                      ? (d) => _fingerPanLayout(d.delta)
+                                      : null,
+                                  onPanEnd: _fingerDragLayout
+                                      ? (_) => _nudge(0, 0, finalize: true)
+                                      : null,
                                   child: CustomPaint(
                                     size: size,
                                     painter: _OverviewPlanPainter(
@@ -730,10 +784,10 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
                                       selectedOpeningIndex:
                                           _placingIndex ??
                                               _selectedOpeningIndex,
-                                      highlightFloor:
-                                          _moveTarget == _OvMoveTarget.floor,
-                                      highlightCeiling:
-                                          _moveTarget == _OvMoveTarget.ceiling,
+                                      highlightFloor: _effectiveMoveTarget ==
+                                          _OvMoveTarget.floor,
+                                      highlightCeiling: _effectiveMoveTarget ==
+                                          _OvMoveTarget.ceiling,
                                       showFloorCutDims: _showFloor &&
                                           !_showCeiling &&
                                           (_moveTarget ==
@@ -745,8 +799,8 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
                                                   _OvMoveTarget.ceiling ||
                                               _moveTarget !=
                                                   _OvMoveTarget.floor),
-                                      paintFloorIn2d:
-                                          _showFloor && !_showCeiling,
+                                      // Always paint floor when enabled (under ceiling grid).
+                                      paintFloorIn2d: _showFloor,
                                       viewScale: _transform.value
                                           .getMaxScaleOnAxis(),
                                     ),
@@ -760,47 +814,102 @@ class _FinishOverviewEditorScreenState extends State<FinishOverviewEditorScreen>
                       Positioned(
                         top: 8,
                         right: 8,
-                        child: Material(
-                          color: _placingIndex != null
-                              ? Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withValues(alpha: 0.85)
-                              : Colors.black.withValues(alpha: 0.42),
-                          borderRadius: BorderRadius.circular(10),
-                          child: InkWell(
-                            onTap: _onAddOpeningFab,
-                            borderRadius: BorderRadius.circular(10),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    _placingIndex != null
-                                        ? Icons.close
-                                        : Icons.door_front_door_outlined,
-                                    color: Colors.white,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    _placingIndex != null
-                                        ? 'Отмена'
-                                        : 'Проём',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!_view3d)
+                              Material(
+                                color: _fingerDragLayout
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .tertiary
+                                        .withValues(alpha: 0.9)
+                                    : Colors.black.withValues(alpha: 0.42),
+                                borderRadius: BorderRadius.circular(10),
+                                child: InkWell(
+                                  onTap: () => setState(() {
+                                    _fingerDragLayout = !_fingerDragLayout;
+                                    if (_fingerDragLayout &&
+                                        _moveTarget == _OvMoveTarget.none) {
+                                      _moveTarget = _autoLayoutTarget;
+                                    }
+                                  }),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 10,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          _fingerDragLayout
+                                              ? Icons.open_with
+                                              : Icons.pan_tool_alt_outlined,
+                                          color: Colors.white,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          _fingerDragLayout
+                                              ? 'Сдвиг'
+                                              : 'Камера',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ],
+                                ),
+                              ),
+                            if (!_view3d) const SizedBox(width: 8),
+                            Material(
+                              color: _placingIndex != null
+                                  ? Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.85)
+                                  : Colors.black.withValues(alpha: 0.42),
+                              borderRadius: BorderRadius.circular(10),
+                              child: InkWell(
+                                onTap: _onAddOpeningFab,
+                                borderRadius: BorderRadius.circular(10),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _placingIndex != null
+                                            ? Icons.close
+                                            : Icons.door_front_door_outlined,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        _placingIndex != null
+                                            ? 'Отмена'
+                                            : 'Проём',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                       if (_placingIndex != null)
@@ -1192,13 +1301,13 @@ class _OverviewPlanPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = CanvasPalette.bg);
 
-    // Floor under ceiling — in 2D only when ceiling is off.
+    // Floor first (under ceiling grid when both visible).
     if (showFloor && paintFloorIn2d) {
       FloorPlanPainter(
         walls: walls,
         metrics: metrics,
         layout: floorLayout,
-        showCutDims: showFloorCutDims,
+        showCutDims: showFloorCutDims && !showCeiling,
         paintBackground: false,
         paintWalls: false,
       ).paint(canvas, size);

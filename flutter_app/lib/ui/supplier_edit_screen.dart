@@ -5,6 +5,8 @@ import '../domain/cost_calculator.dart';
 import '../domain/material_catalog.dart';
 import '../domain/money_format.dart';
 import '../domain/user_product_aliases.dart';
+import 'prices_share_flow.dart';
+import 'widgets/long_press_action_tile.dart';
 import 'widgets/numeric_input.dart';
 
 class SupplierEditScreen extends StatefulWidget {
@@ -317,7 +319,37 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
       } else {
         _selectedKeys.add(key);
       }
+      _selectMode = _selectedKeys.isNotEmpty;
     });
+  }
+
+  Future<void> _shareSelected() async {
+    final selected = _prices
+        .where((p) => _selectedKeys.contains(p.itemKey))
+        .toList();
+    if (selected.isEmpty) return;
+    await shareSupplierMaterials(
+      context,
+      supplier: Supplier(id: widget.supplierId, name: _savedName),
+      selectedPrices: selected,
+      itemKeys: selected.map((p) => p.itemKey),
+    );
+  }
+
+  Future<void> _shareOne(SupplierPrice p) {
+    return shareSupplierMaterials(
+      context,
+      supplier: Supplier(id: widget.supplierId, name: _savedName),
+      selectedPrices: [p],
+      itemKeys: [p.itemKey],
+    );
+  }
+
+  Future<void> _shareAll() {
+    return shareSupplierMaterials(
+      context,
+      supplier: Supplier(id: widget.supplierId, name: _savedName),
+    );
   }
 
   Future<void> _mergeSelected() async {
@@ -490,6 +522,11 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
               ),
             ] else ...[
               IconButton(
+                tooltip: 'Поделиться всеми',
+                onPressed: _prices.isEmpty ? null : _shareAll,
+                icon: const Icon(Icons.share_outlined),
+              ),
+              IconButton(
                 tooltip: 'Выбрать для объединения',
                 onPressed: () => setState(() {
                   _selectMode = true;
@@ -508,6 +545,37 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
                 icon: const Icon(Icons.add),
                 label: const Text('Добавить позицию'),
               ),
+        bottomNavigationBar: _selectMode
+            ? SafeArea(
+                child: Material(
+                  elevation: 8,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextButton.icon(
+                            onPressed:
+                                _selectedKeys.isEmpty ? null : _shareSelected,
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Поделиться'),
+                          ),
+                        ),
+                        if (_selectedKeys.length >= 2)
+                          Expanded(
+                            child: TextButton.icon(
+                              onPressed: _mergeSelected,
+                              icon: const Icon(Icons.merge_type),
+                              label: const Text('Объединить'),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : null,
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : ListView(
@@ -538,29 +606,18 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _selectMode
-                        ? 'Отметьте дубли одного материала, затем «Объединить».'
-                        : 'Цены закупки и клиента. Иконка объединения — слить дубли '
-                            'из разных чеков (алиасы запоминаются).',
+                        ? 'Выбор: «Поделиться» или «Объединить» дубли.'
+                        : 'Удерживайте позицию — поделиться / выбрать. '
+                            'Иконка объединения — слить дубли из чеков.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
                   for (final p in visible)
-                    Card(
-                      color: _selectedKeys.contains(p.itemKey)
-                          ? Theme.of(context)
-                              .colorScheme
-                              .secondaryContainer
-                              .withValues(alpha: 0.55)
-                          : null,
-                      child: ListTile(
-                        leading: _selectMode
-                            ? Checkbox(
-                                value: _selectedKeys.contains(p.itemKey),
-                                onChanged: (_) => _toggleSelect(p.itemKey),
-                              )
-                            : null,
-                        title: Text(p.productName),
-                        subtitle: Text([
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: LongPressActionTile(
+                        title: p.productName,
+                        subtitle: [
                           if (p.itemKey.startsWith('rx_')) 'из чека',
                           if (p.supplierSku.isNotEmpty) 'SKU ${p.supplierSku}',
                           if (p.unitPriceCost > 0)
@@ -570,8 +627,8 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
                           if (p.unitsPerPack > 1)
                             'уп×${p.unitsPerPack.round()}',
                           p.receiptUnit == 'pack' ? 'за уп' : 'за шт',
-                        ].join(' · ')),
-                        trailing: (!_selectMode && p.unitPriceClient > 0)
+                        ].join(' · '),
+                        titleTrailing: p.unitPriceClient > 0
                             ? Text(
                                 formatRub(p.unitPriceClient),
                                 style: const TextStyle(
@@ -579,18 +636,17 @@ class _SupplierEditScreenState extends State<SupplierEditScreen> {
                                 ),
                               )
                             : null,
-                        onTap: () {
-                          if (_selectMode) {
-                            _toggleSelect(p.itemKey);
-                          } else {
-                            _edit(p);
-                          }
-                        },
-                        onLongPress: () {
-                          setState(() {
-                            _selectMode = true;
-                            _selectedKeys.add(p.itemKey);
-                          });
+                        leading: const Icon(Icons.inventory_2_outlined),
+                        selected: _selectedKeys.contains(p.itemKey),
+                        selectionMode: _selectMode,
+                        onToggleSelect: () => _toggleSelect(p.itemKey),
+                        onOpen: () => _edit(p),
+                        onShare: () => _shareOne(p),
+                        onDelete: () async {
+                          await AppScope.of(context)
+                              .suppliers
+                              .deletePrice(widget.supplierId, p.itemKey);
+                          await _reload();
                         },
                       ),
                     ),

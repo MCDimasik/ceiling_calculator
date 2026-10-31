@@ -47,3 +47,18 @@ Future<Project?> importProjectFile(ProjectRepository repo) async {
   await repo.saveProject(project);
   return project;
 }
+
+/// Import from a dropped / known filesystem path (desktop DnD).
+Future<Project> importProjectFromPath(
+  ProjectRepository repo,
+  String path,
+) async {
+  final lower = path.toLowerCase();
+  if (!lower.endsWith(fileExtension) && !lower.endsWith('.json')) {
+    throw FormatException('Ожидался файл $fileExtension');
+  }
+  final raw = await File(path).readAsString(encoding: utf8);
+  final project = decodeProjectFile(raw);
+  await repo.saveProject(project);
+  return project;
+}

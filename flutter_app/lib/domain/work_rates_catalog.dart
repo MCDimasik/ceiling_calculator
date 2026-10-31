@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'sync_revisions.dart';
+
 /// One priced work item inside a category.
 class WorkRateItem {
   WorkRateItem({
@@ -608,7 +610,7 @@ class WorkRatesCatalogStore {
     final raw = prefs.getString(_prefKey);
     if (raw == null || raw.isEmpty) {
       final seed = seedWorkRatesCatalog();
-      await save(seed);
+      await save(seed, bumpRevision: false);
       return seed;
     }
     try {
@@ -616,26 +618,133 @@ class WorkRatesCatalogStore {
       final out = list
           .map((e) => WorkRateCategory.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
-      final result = out.isEmpty ? seedWorkRatesCatalog() : out;
-      _cache = result;
-      return result;
+      if (out.isEmpty) {
+        final seed = seedWorkRatesCatalog();
+        await save(seed, bumpRevision: false);
+        return seed;
+      }
+      _cache = out;
+      return out;
     } catch (_) {
       final seed = seedWorkRatesCatalog();
-      _cache = seed;
+      await save(seed, bumpRevision: false);
       return seed;
     }
   }
 
-  static Future<void> save(List<WorkRateCategory> categories) async {
+  static Future<void> save(
+    List<WorkRateCategory> categories, {
+    bool bumpRevision = true,
+  }) async {
     _cache = categories;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _prefKey,
       jsonEncode(categories.map((e) => e.toJson()).toList()),
     );
+    if (bumpRevision) {
+      await SyncRevisions.touch(SyncRevisions.workRatesKey());
+    }
   }
 
   static Future<void> resetToSeed() async {
     await save(seedWorkRatesCatalog());
   }
+
+  /// Inbox / sync payload for «Расценки» (work rates catalog).
+  static Future<Map<String, dynamic>> buildSharePayload({
+    String? fromOwner,
+  }) async {
+    final cats = await ensureLoaded();
+    final itemCount =
+        cats.fold<int>(0, (sum, c) => sum + c.items.length);
+    return {
+      'stub': false,
+      'kind': 'prices',
+      'from_owner': fromOwner,
+      'catalog_version': 3,
+      'category_count': cats.length,
+      'item_count': itemCount,
+      'categories_preview': [
+        for (final c in cats)
+          {
+            'name': c.name,
+            'items': c.items.length,
+          },
+      ],
+      'snapshot': {
+        'categories': [for (final c in cats) c.toJson()],
+      },
+    };
+  }
+
+  /// Replace local catalog from a share payload. Returns applied item count.
+  static Future<int> applySharePayload(Map<String, dynamic> payload) async {
+    final snapshot = payload['snapshot'];
+    if (snapshot is! Map) {
+      throw StateError('В сообщении нет снимка каталога расценок');
+    }
+    final raw = snapshot['categories'];
+    if (raw is! List || raw.isEmpty) {
+      throw StateError('Снимок расценок пуст');
+    }
+    final cats = _parseCategories(raw);
+    if (cats.isEmpty) {
+      throw StateError('Не удалось разобрать каталог расценок');
+    }
+    await save(cats);
+    return cats.fold<int>(0, (sum, c) => sum + c.items.length);
+  }
+
+  /// Merge categories/items into local catalog (by category id + matchKey).
+  static Future<int> mergeShareCategories(List<dynamic> raw) async {
+    final incoming = _parseCategories(raw);
+    if (incoming.isEmpty) {
+      throw StateError('Снимок расценок пуст');
+    }
+    final local = [for (final c in await ensureLoaded()) c];
+    final byId = <String, WorkRateCategory>{
+      for (final c in local) c.id: c,
+    };
+    var applied = 0;
+    for (final cat in incoming) {
+      final existing = byId[cat.id];
+      if (existing == null) {
+        local.add(
+          WorkRateCategory(
+            id: cat.id,
+            name: cat.name,
+            items: [for (final i in cat.items) i],
+          ),
+        );
+        byId[cat.id] = local.last;
+        applied += cat.items.length;
+        continue;
+      }
+      if (cat.name.trim().isNotEmpty) existing.name = cat.name;
+      final byKey = <String, WorkRateItem>{
+        for (final i in existing.items) i.matchKey: i,
+      };
+      for (final item in cat.items) {
+        byKey[item.matchKey] = WorkRateItem(
+          matchKey: item.matchKey,
+          name: item.name,
+          unit: item.unit,
+          unitPrice: item.unitPrice,
+        );
+        applied++;
+      }
+      existing.items
+        ..clear()
+        ..addAll(byKey.values);
+    }
+    await save(local);
+    return applied;
+  }
+
+  static List<WorkRateCategory> _parseCategories(List<dynamic> raw) => [
+        for (final e in raw)
+          if (e is Map)
+            WorkRateCategory.fromJson(Map<String, dynamic>.from(e)),
+      ];
 }

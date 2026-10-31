@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_scope.dart';
 import '../domain/finish_design_baseline.dart';
 import '../domain/models.dart';
+import '../domain/project_floors.dart';
 
 /// Batch re-baseline: snapshot current state as new «project» for selected rooms.
 class RebaselineWizardScreen extends StatefulWidget {
@@ -140,11 +141,16 @@ class _RebaselineWizardScreenState extends State<RebaselineWizardScreen> {
                                 _selected.remove(room.id);
                               }
                             }),
-                    title: Text(room.name),
+                    title: Text(
+                      roomNameWithFloor(
+                        room: room,
+                        floors: _project?.floors ?? const [],
+                      ),
+                    ),
                     subtitle: Text(
                       hasFinishDesignBaseline(room)
                           ? formatFinishBaselineStatus(room)
-                          : 'Бaseline ещё не создан',
+                          : 'Baseline ещё не создан',
                     ),
                     secondary: Icon(
                       room.layoutConfirmed ? Icons.check_circle_outline : Icons.edit_outlined,

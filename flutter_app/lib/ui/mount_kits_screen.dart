@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../app_scope.dart';
 import '../domain/finish_material_links.dart';
+import 'kit_share_flow.dart';
 import 'widgets/layer_price_fields.dart' show showSupplierMaterialPicker;
+import 'widgets/long_press_action_tile.dart';
 import 'widgets/numeric_input.dart';
 import 'widgets/screen_scaffold.dart';
 
@@ -20,7 +23,11 @@ class _MountKitsScreenState extends State<MountKitsScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _reload();
+      if (!mounted) return;
+      await AppScope.of(context).sync.refreshInbox();
+    });
   }
 
   Future<void> _reload() async {
@@ -33,14 +40,28 @@ class _MountKitsScreenState extends State<MountKitsScreen> {
   }
 
   Future<void> _edit({FinishMountKit? existing}) async {
-    final result = await showDialog<FinishMountKit>(
+    final result = await showDialog<_KitSaveResult>(
       context: context,
       builder: (ctx) => _MountKitEditorDialog(existing: existing),
     );
     if (result == null) return;
-    await upsertMountKit(result);
+    await upsertMountKit(result.kit);
     await _reload();
+    if (!mounted) return;
+    if (result.shareForAll) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Комплект «${result.kit.name}» сохранён')),
+      );
+      await shareMountKit(context, result.kit);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Комплект «${result.kit.name}» сохранён')),
+      );
+    }
   }
+
+  Future<void> _shareKit(FinishMountKit kit) => shareMountKit(context, kit);
 
   Future<void> _delete(FinishMountKit kit) async {
     final ok = await showDialog<bool>(
@@ -49,8 +70,14 @@ class _MountKitsScreenState extends State<MountKitsScreen> {
         title: const Text('Удалить комплект?'),
         content: Text('«${kit.name}» будет удалён.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Удалить')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить'),
+          ),
         ],
       ),
     );
@@ -61,57 +88,91 @@ class _MountKitsScreenState extends State<MountKitsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ScreenScaffold(
-      appBar: AppBar(title: const Text('Комплекты материалов')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _edit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Комплект'),
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _kits.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text(
-                      'Создайте комплект и привяжите к типу слоя '
-                      '(краска, стяжка…). В диалоге слоя комплекты появятся первыми.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
-                  itemCount: _kits.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, i) {
-                    final k = _kits[i];
-                    final layer = mountKitLayerKindLabel(k.section, k.layerKind);
-                    return Card(
-                      child: ListTile(
-                        title: Text(k.name),
-                        subtitle: Text(
-                          '${mountKitSectionLabel(k.section)} · $layer · '
-                          '${k.items.length} поз.',
-                        ),
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (v) {
-                            if (v == 'edit') _edit(existing: k);
-                            if (v == 'delete') _delete(k);
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(value: 'edit', child: Text('Изменить')),
-                            PopupMenuItem(value: 'delete', child: Text('Удалить')),
-                          ],
-                        ),
-                        onTap: () => _edit(existing: k),
-                      ),
-                    );
-                  },
+    final sync = AppScope.of(context).sync;
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) {
+        final pending = sync.pendingKitOffers;
+        return ScreenScaffold(
+          appBar: AppBar(
+            title: const Text('Комплекты материалов'),
+            actions: [
+              if (pending > 0)
+                IconButton(
+                  tooltip: 'Новый комплект',
+                  onPressed: () => _edit(),
+                  icon: const Icon(Icons.add),
                 ),
+            ],
+          ),
+          floatingActionButton: Badge(
+            isLabelVisible: pending > 0,
+            label: Text('$pending'),
+            child: FloatingActionButton.extended(
+              onPressed: () async {
+                if (pending > 0) {
+                  await showPendingKitsInboxSheet(context);
+                  if (!mounted) return;
+                  await sync.refreshInbox();
+                  await _reload();
+                  return;
+                }
+                await _edit();
+              },
+              icon: Icon(
+                pending > 0 ? Icons.mark_email_unread_outlined : Icons.add,
+              ),
+              label: Text(pending > 0 ? 'Входящие' : 'Комплект'),
+            ),
+          ),
+          body: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _kits.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          pending > 0
+                              ? 'Есть входящие комплекты — нажмите «Входящие».'
+                              : 'Создайте комплект и привяжите к типу слоя '
+                                  '(краска, стяжка…). В диалоге слоя комплекты '
+                                  'появятся первыми.\n\n'
+                                  '«Сохранить для всех» отправит коллегам '
+                                  'во «Входящие».',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
+                      itemCount: _kits.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, i) {
+                        final k = _kits[i];
+                        final layer =
+                            mountKitLayerKindLabel(k.section, k.layerKind);
+                        return LongPressActionTile(
+                          title: k.name,
+                          subtitle:
+                              '${mountKitSectionLabel(k.section)} · $layer · '
+                              '${k.items.length} поз.',
+                          leading: const Icon(Icons.inventory_2_outlined),
+                          onOpen: () => _edit(existing: k),
+                          onShare: () => _shareKit(k),
+                          onDelete: () => _delete(k),
+                        );
+                      },
+                    ),
+        );
+      },
     );
   }
+}
+
+class _KitSaveResult {
+  const _KitSaveResult({required this.kit, required this.shareForAll});
+  final FinishMountKit kit;
+  final bool shareForAll;
 }
 
 class _MountKitEditorDialog extends StatefulWidget {
@@ -141,8 +202,11 @@ class _MountKitEditorDialogState extends State<_MountKitEditorDialog> {
         _section != 'any') {
       _section = 'walls';
     }
-    _layerKind = (e?.layerKind.trim().isNotEmpty == true) ? e!.layerKind : 'any';
-    _items = [for (final m in e?.items ?? const <FinishMaterialLink>[]) m.copy()];
+    _layerKind =
+        (e?.layerKind.trim().isNotEmpty == true) ? e!.layerKind : 'any';
+    _items = [
+      for (final m in e?.items ?? const <FinishMaterialLink>[]) m.copy(),
+    ];
   }
 
   @override
@@ -155,13 +219,41 @@ class _MountKitEditorDialogState extends State<_MountKitEditorDialog> {
     final picked = await showSupplierMaterialPicker(context);
     if (picked == null) return;
     setState(() {
-      _items.add(FinishMaterialLink(
-        itemKey: picked.itemKey,
-        productName: picked.productName,
-        qtyPerUnit: 1,
-        unit: 'м²',
-      ));
+      _items.add(
+        FinishMaterialLink(
+          itemKey: picked.itemKey,
+          productName: picked.productName,
+          qtyPerUnit: 1,
+          unit: 'м²',
+        ),
+      );
     });
+  }
+
+  FinishMountKit? _buildKitOrSnack() {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Укажите название')),
+      );
+      return null;
+    }
+    if (_items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Добавьте хотя бы один материал')),
+      );
+      return null;
+    }
+    final layerOpts = mountKitLayerKindOptions(_section);
+    final kind =
+        layerOpts.any((o) => o.id == _layerKind) ? _layerKind : 'any';
+    return FinishMountKit(
+      id: widget.existing?.id ?? newMountKitId(),
+      name: name,
+      section: _section,
+      layerKind: kind == 'any' ? '' : kind,
+      items: [for (final m in _items) m.copy()],
+    );
   }
 
   @override
@@ -250,36 +342,31 @@ class _MountKitEditorDialogState extends State<_MountKitEditorDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-        FilledButton(
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        TextButton(
           onPressed: () {
-            final name = _nameCtrl.text.trim();
-            if (name.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Укажите название')),
-              );
-              return;
-            }
-            if (_items.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Добавьте хотя бы один материал')),
-              );
-              return;
-            }
-            final kind =
-                layerOpts.any((o) => o.id == _layerKind) ? _layerKind : 'any';
+            final kit = _buildKitOrSnack();
+            if (kit == null) return;
             Navigator.pop(
               context,
-              FinishMountKit(
-                id: widget.existing?.id ?? newMountKitId(),
-                name: name,
-                section: _section,
-                layerKind: kind == 'any' ? '' : kind,
-                items: [for (final m in _items) m.copy()],
-              ),
+              _KitSaveResult(kit: kit, shareForAll: false),
             );
           },
           child: const Text('Сохранить'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final kit = _buildKitOrSnack();
+            if (kit == null) return;
+            Navigator.pop(
+              context,
+              _KitSaveResult(kit: kit, shareForAll: true),
+            );
+          },
+          child: const Text('Для всех'),
         ),
       ],
     );
@@ -337,12 +424,14 @@ class _KitItemRow extends StatelessWidget {
               ),
               onChanged: (v) {
                 final q = double.tryParse(v.replaceAll(',', '.')) ?? 1;
-                onChanged(FinishMaterialLink(
-                  itemKey: link.itemKey,
-                  productName: link.productName,
-                  qtyPerUnit: q <= 0 ? 1 : q,
-                  unit: link.unit,
-                ));
+                onChanged(
+                  FinishMaterialLink(
+                    itemKey: link.itemKey,
+                    productName: link.productName,
+                    qtyPerUnit: q <= 0 ? 1 : q,
+                    unit: link.unit,
+                  ),
+                );
               },
             ),
           ),
@@ -363,12 +452,14 @@ class _KitItemRow extends StatelessWidget {
               ],
               onChanged: (u) {
                 if (u == null) return;
-                onChanged(FinishMaterialLink(
-                  itemKey: link.itemKey,
-                  productName: link.productName,
-                  qtyPerUnit: link.qtyPerUnit,
-                  unit: u,
-                ));
+                onChanged(
+                  FinishMaterialLink(
+                    itemKey: link.itemKey,
+                    productName: link.productName,
+                    qtyPerUnit: link.qtyPerUnit,
+                    unit: u,
+                  ),
+                );
               },
             ),
           ),

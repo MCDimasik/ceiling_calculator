@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_scope.dart';
 import '../domain/dimension_lines.dart';
@@ -12,6 +13,8 @@ import '../domain/opening_remap.dart';
 import '../domain/plan_orthogonal.dart';
 import '../domain/room_draft.dart';
 import '../domain/wall_geometry.dart';
+import 'adaptive_layout.dart';
+import 'desktop_cascade.dart';
 import 'finish_overview_editor_screen.dart';
 import 'finish_room_screen.dart';
 import 'geometry_capture_hub_screen.dart';
@@ -755,22 +758,139 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
 
   String get _nextEditorLabel => _isFinish ? 'К отделке' : 'Раскладка';
 
-  /// After save/discard: finish + closed contour → room tabs; else pop.
+  /// After save/discard: finish + closed contour → room tabs; else pop / closeDetail.
   Future<void> _exitAfterEditor() async {
     if (!mounted) return;
     final closed = _draft.isClosed && _draft.walls.length >= 3;
+    final cascade = DesktopCascadeHost.maybeOf(context);
     if (_isFinish && closed) {
+      final page = FinishRoomScreen(
+        projectId: widget.projectId,
+        roomId: widget.roomId,
+      );
+      if (cascade != null) {
+        cascade.openDetail(
+          page,
+          title: _room?.name ?? 'Отделка',
+          detailId: 'room:${widget.roomId}',
+        );
+        return;
+      }
       await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => FinishRoomScreen(
-            projectId: widget.projectId,
-            roomId: widget.roomId,
-          ),
-        ),
+        MaterialPageRoute<void>(builder: (_) => page),
       );
       return;
     }
+    if (cascade != null) {
+      cascade.closeDetail();
+      return;
+    }
     Navigator.of(context).pop();
+  }
+
+  /// Hover preview for click-to-draw (canvas coords).
+  String? _hoverDrawDir;
+  Offset? _hoverArrowFrom;
+  Offset? _hoverArrowTo;
+
+  bool _useEditorDesktopChrome(BuildContext context) {
+    return DesktopCascadeHost.maybeOf(context) != null ||
+        AdaptiveBreakpoints.useDesktopChrome(context);
+  }
+
+  String? _dirFromDelta(Offset delta, {double minDist = 12}) {
+    if (delta.distance < minDist) return null;
+    final absDx = delta.dx.abs();
+    final absDy = delta.dy.abs();
+    if (absDx >= absDy) {
+      return delta.dx >= 0 ? 'right' : 'left';
+    }
+    return delta.dy < 0 ? 'up' : 'down';
+  }
+
+  void _updateHoverDrawPreview(Offset localPos) {
+    if (_placingIndex != null || _dragVertex != null || _dragOpening != null) {
+      if (_hoverDrawDir != null) {
+        setState(() {
+          _hoverDrawDir = null;
+          _hoverArrowFrom = null;
+          _hoverArrowTo = null;
+        });
+      }
+      return;
+    }
+    final m = _currentMetrics();
+    final cursorCanvas =
+        m.worldToCanvas(_draft.cursor[0], _draft.cursor[1]);
+    final delta = localPos - cursorCanvas;
+    final dir = _dirFromDelta(delta);
+    if (dir == null) {
+      if (_hoverDrawDir != null) {
+        setState(() {
+          _hoverDrawDir = null;
+          _hoverArrowFrom = null;
+          _hoverArrowTo = null;
+        });
+      }
+      return;
+    }
+    final len = 56.0;
+    final tip = switch (dir) {
+      'right' => cursorCanvas + Offset(len, 0),
+      'left' => cursorCanvas + Offset(-len, 0),
+      'up' => cursorCanvas + Offset(0, -len),
+      _ => cursorCanvas + Offset(0, len),
+    };
+    setState(() {
+      _hoverDrawDir = dir;
+      _hoverArrowFrom = cursorCanvas;
+      _hoverArrowTo = tip;
+    });
+  }
+
+  void _onCanvasTapDownDraw(TapDownDetails details) {
+    if (_placingIndex != null || _dragVertex != null || _dragOpening != null) {
+      return;
+    }
+    final m = _currentMetrics();
+    if (_hitVertex(details.localPosition, m) != null) return;
+    final cursorCanvas =
+        m.worldToCanvas(_draft.cursor[0], _draft.cursor[1]);
+    final dir = _dirFromDelta(details.localPosition - cursorCanvas);
+    if (dir == null) return;
+    // ignore: discarded_futures
+    _askLength(dir);
+  }
+
+  KeyEventResult _onEditorKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (_placingIndex != null) return KeyEventResult.ignored;
+    // Physical keys: WASD / arrows work regardless of input language.
+    final key = event.physicalKey;
+    String? dir;
+    if (key == PhysicalKeyboardKey.arrowUp ||
+        key == PhysicalKeyboardKey.keyW) {
+      dir = 'up';
+    } else if (key == PhysicalKeyboardKey.arrowDown ||
+        key == PhysicalKeyboardKey.keyS) {
+      dir = 'down';
+    } else if (key == PhysicalKeyboardKey.arrowLeft ||
+        key == PhysicalKeyboardKey.keyA) {
+      dir = 'left';
+    } else if (key == PhysicalKeyboardKey.arrowRight ||
+        key == PhysicalKeyboardKey.keyD) {
+      dir = 'right';
+    } else if (key == PhysicalKeyboardKey.keyC &&
+        _draft.walls.length >= 3 &&
+        !_draft.isClosed) {
+      setState(() => _draft.closeRoom());
+      return KeyEventResult.handled;
+    } else {
+      return KeyEventResult.ignored;
+    }
+    // ignore: discarded_futures
+    _askLength(dir);
+    return KeyEventResult.handled;
   }
 
   Future<void> _goNextEditor() async {
@@ -912,8 +1032,12 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
         'P: ${perimeter.toStringAsFixed(2)} м  ·  '
         'Площадь: ${area.toStringAsFixed(2)} м²'
         '${_draft.isClosed ? '  ·  замкнута' : ''}';
+    final desktopChrome = _useEditorDesktopChrome(context);
 
-    return PopScope(
+    return Focus(
+      autofocus: desktopChrome,
+      onKeyEvent: _onEditorKey,
+      child: PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
@@ -971,7 +1095,12 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Text(info, style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              desktopChrome
+                  ? '$info\nКлик / стрелки / WASD — стена · C — замкнуть · джойстик справа'
+                  : info,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
           Expanded(
             child: ColoredBox(
@@ -1002,8 +1131,26 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
                         child: SizedBox(
                           width: canvasSize.width,
                           height: canvasSize.height,
-                          child: GestureDetector(
+                          child: MouseRegion(
+                            onHover: desktopChrome
+                                ? (e) =>
+                                    _updateHoverDrawPreview(e.localPosition)
+                                : null,
+                            onExit: desktopChrome
+                                ? (_) {
+                                    if (_hoverDrawDir == null) return;
+                                    setState(() {
+                                      _hoverDrawDir = null;
+                                      _hoverArrowFrom = null;
+                                      _hoverArrowTo = null;
+                                    });
+                                  }
+                                : null,
+                            child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
+                            onTapDown: desktopChrome
+                                ? _onCanvasTapDownDraw
+                                : null,
                             onTapUp: (d) => _onCanvasTap(d.localPosition),
                             onLongPressStart: (d) {
                               final m = _currentMetrics();
@@ -1062,25 +1209,44 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
                                 if (mounted) _ensureContentVisible();
                               });
                             },
-                            child: CustomPaint(
-                              size: canvasSize,
-                              painter: _WallsPainter(
-                                walls: _draft.walls,
-                                cursor: _draft.cursor,
-                                isClosed: _draft.isClosed,
-                                openings: _openings,
-                                selectedVertex: _selectedVertex,
-                                dragVertex: _dragVertex,
-                                placingIndex: _placingIndex,
-                                selectedOpeningIndex:
-                                    _dragOpening ?? _selectedOpening,
-                                showAngles: _dragVertex != null,
-                                transform: _transform,
-                              ),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                CustomPaint(
+                                  size: canvasSize,
+                                  painter: _WallsPainter(
+                                    walls: _draft.walls,
+                                    cursor: _draft.cursor,
+                                    isClosed: _draft.isClosed,
+                                    openings: _openings,
+                                    selectedVertex: _selectedVertex,
+                                    dragVertex: _dragVertex,
+                                    placingIndex: _placingIndex,
+                                    selectedOpeningIndex:
+                                        _dragOpening ?? _selectedOpening,
+                                    showAngles: _dragVertex != null,
+                                    transform: _transform,
+                                  ),
+                                ),
+                                if (desktopChrome &&
+                                    _hoverArrowFrom != null &&
+                                    _hoverArrowTo != null &&
+                                    _hoverDrawDir != null)
+                                  CustomPaint(
+                                    size: canvasSize,
+                                    painter: _DrawDirArrowPainter(
+                                      from: _hoverArrowFrom!,
+                                      to: _hoverArrowTo!,
+                                      label: _dirLabels[_hoverDrawDir!] ??
+                                          _hoverDrawDir!,
+                                    ),
+                                  ),
+                              ],
                             ),
-                          ),
-                        ),
-                      ),
+                          ), // GestureDetector
+                          ), // MouseRegion
+                        ), // SizedBox
+                      ), // InteractiveViewer
                       Positioned(
                         top: 8,
                         right: 8,
@@ -1186,32 +1352,67 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
                             ),
                           ),
                         ),
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: SafeArea(
-                          top: false,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (_draft.walls.length >= 3 && !_draft.isClosed)
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
-                                    child: OutlinedButton.icon(
-                                      onPressed: () => setState(() => _draft.closeRoom()),
-                                      icon: const Icon(Icons.link),
-                                      label: const Text('Замкнуть комнату'),
+                      if (!desktopChrome)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: SafeArea(
+                            top: false,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_draft.walls.length >= 3 &&
+                                      !_draft.isClosed)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: OutlinedButton.icon(
+                                        onPressed: () =>
+                                            setState(() => _draft.closeRoom()),
+                                        icon: const Icon(Icons.link),
+                                        label: const Text('Замкнуть комнату'),
+                                      ),
                                     ),
-                                  ),
-                                AnalogJoystick(onDirection: _askLength),
-                              ],
+                                  AnalogJoystick(onDirection: _askLength),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
+                      if (desktopChrome) ...[
+                        if (_draft.walls.length >= 3 && !_draft.isClosed)
+                          Positioned(
+                            left: 12,
+                            bottom: 12,
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  setState(() => _draft.closeRoom()),
+                              icon: const Icon(Icons.link),
+                              label: const Text('Замкнуть комнату'),
+                            ),
+                          ),
+                        Positioned(
+                          right: 12,
+                          bottom: 12,
+                          child: Material(
+                            elevation: 3,
+                            borderRadius: BorderRadius.circular(16),
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerLowest
+                                .withValues(alpha: 0.94),
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: AnalogJoystick(
+                                size: 128,
+                                onDirection: _askLength,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   );
                 },
@@ -1221,8 +1422,66 @@ class _RoomEditorScreenState extends State<RoomEditorScreen> {
         ],
       ),
     ),
+    ),
     );
   }
+}
+
+class _DrawDirArrowPainter extends CustomPainter {
+  _DrawDirArrowPainter({
+    required this.from,
+    required this.to,
+    required this.label,
+  });
+
+  final Offset from;
+  final Offset to;
+  final String label;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF1A56DB)
+      ..strokeWidth = 3.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(from, to, paint);
+    final dir = to - from;
+    if (dir.distance < 1) return;
+    final n = dir / dir.distance;
+    final orth = Offset(-n.dy, n.dx);
+    final tip = to;
+    final a = tip - n * 14 + orth * 8;
+    final b = tip - n * 14 - orth * 8;
+    final head = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(a.dx, a.dy)
+      ..lineTo(b.dx, b.dy)
+      ..close();
+    canvas.drawPath(
+      head,
+      Paint()
+        ..color = const Color(0xFF1A56DB)
+        ..style = PaintingStyle.fill,
+    );
+    final tp = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: const TextStyle(
+          color: Color(0xFF1A56DB),
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          backgroundColor: Color(0xE6FFFFFF),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, tip + const Offset(8, -18));
+  }
+
+  @override
+  bool shouldRepaint(covariant _DrawDirArrowPainter old) =>
+      old.from != from || old.to != to || old.label != label;
 }
 
 class _WallsPainter extends CustomPainter {

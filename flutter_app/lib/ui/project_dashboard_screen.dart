@@ -570,7 +570,12 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
             const ListTile(title: Text('Шаблон для сравнения')),
             for (final item in withLayout)
               ListTile(
-                title: Text(item.room.name),
+                title: Text(
+                  roomNameWithFloor(
+                    room: item.room,
+                    floors: dash.project.floors,
+                  ),
+                ),
                 onTap: () => Navigator.pop(ctx, item.room),
               ),
           ],
@@ -646,7 +651,12 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
             const ListTile(title: Text('Выберите типовую комнату')),
             for (final item in withLayout)
               ListTile(
-                title: Text(item.room.name),
+                title: Text(
+                  roomNameWithFloor(
+                    room: item.room,
+                    floors: dash.project.floors,
+                  ),
+                ),
                 onTap: () => Navigator.pop(ctx, item.room),
               ),
           ],
@@ -774,7 +784,14 @@ class _RoomDashTile extends StatelessWidget {
         title: Row(
           children: [
             Expanded(
-              child: Text(isStair ? '${room.name} · ЛК' : room.name),
+              child: Text(
+                isStair
+                    ? '${room.name} · ЛК'
+                    : roomNameWithFloor(
+                        room: room,
+                        floors: project.floors,
+                      ),
+              ),
             ),
             RoomWorkflowChip(status: workflow),
           ],

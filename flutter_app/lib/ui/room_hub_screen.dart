@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_scope.dart';
 import '../domain/documentation_model.dart';
 import '../domain/finish_model.dart';
+import '../domain/local_user_role.dart';
 import '../domain/models.dart';
 import '../domain/room_documentation_status.dart';
 import 'documentation_flow_screens.dart';
@@ -252,7 +253,8 @@ class _RoomHubBodyState extends State<_RoomHubBody> {
               onTap: _openCapture,
             ),
           ],
-          if (module == AppModule.finish)
+          if (module == AppModule.finish &&
+              AppScope.of(context).user.effectiveRole.canFinish)
             _HubTile(
               icon: Icons.home_work_outlined,
               title: 'Отделка',
@@ -261,21 +263,24 @@ class _RoomHubBodyState extends State<_RoomHubBody> {
               onTap: _openFinish,
             ),
           if (module == AppModule.materials) ...[
-            _HubTile(
-              icon: Icons.inventory_2_outlined,
-              title: 'Материалы отделки',
-              subtitle: 'Пол · стены · площади · доп. работы',
-              highlighted: highlight == AppModule.materials,
-              onTap: _openMaterials,
-            ),
-            _HubTile(
-              icon: Icons.grid_view_rounded,
-              title: 'Материалы потолка',
-              subtitle: 'Направляющие, плиты, подвесы',
-              onTap: _openCeilingMaterials,
-            ),
+            if (AppScope.of(context).user.effectiveRole.canFinish)
+              _HubTile(
+                icon: Icons.inventory_2_outlined,
+                title: 'Материалы отделки',
+                subtitle: 'Пол · стены · площади · доп. работы',
+                highlighted: highlight == AppModule.materials,
+                onTap: _openMaterials,
+              ),
+            if (AppScope.of(context).user.effectiveRole.canCeilingMaterials)
+              _HubTile(
+                icon: Icons.grid_view_rounded,
+                title: 'Материалы потолка',
+                subtitle: 'Направляющие, плиты, подвесы',
+                onTap: _openCeilingMaterials,
+              ),
           ],
-          if (module == AppModule.documentation)
+          if (module == AppModule.documentation &&
+              AppScope.of(context).user.effectiveRole.canDocumentation)
             Card(
               clipBehavior: Clip.antiAlias,
               color: highlight == AppModule.documentation

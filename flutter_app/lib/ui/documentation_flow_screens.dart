@@ -28,6 +28,7 @@ import '../domain/material_catalog.dart';
 import '../domain/material_certificates.dart';
 import '../domain/models.dart';
 import '../domain/official_form_export.dart';
+import '../domain/project_documents_vault.dart';
 import '../domain/partner_profile.dart';
 import '../domain/project_doc_import.dart';
 import '../domain/project_export.dart';
@@ -256,6 +257,14 @@ class _DocumentationRoomScreenState extends State<DocumentationRoomScreen> {
     await file.writeAsBytes(bytes);
     await SharePlus.instance.share(
       ShareParams(files: [XFile(file.path)], subject: 'Скрытые работы · ${room.name}'),
+    );
+    await registerExportInVault(
+      projects: AppScope.of(context).projects,
+      project: project,
+      category: DocumentVaultCategory.act,
+      displayName: 'Скрытые работы · ${room.name}',
+      sourcePath: file.path,
+      roomId: room.id,
     );
   }
 

@@ -34,6 +34,14 @@ build-last.log
 .DS_Store
 Thumbs.db
 
+# Local binaries / scratch (not source)
+*.apk
+*.aab
+_rate_screens/
+_logo_legacy.png
+flutter_app/Batch_docs.zip
+flutter_app/tmp_guide_dump.dart
+
 # Flutter
 flutter_app/.dart_tool/
 flutter_app/.flutter-plugins

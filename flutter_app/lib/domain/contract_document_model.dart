@@ -707,11 +707,8 @@ List<ContractWorkLine> _linesFromScopeAreas({
   return out;
 }
 
-String roomLabelForDocs(Room room, List<ProjectFloor> floors) {
-  final floor = roomFloorLabel(room: room, floors: floors);
-  if (floor == null || floor.isEmpty) return room.name;
-  return '${room.name} · $floor';
-}
+String roomLabelForDocs(Room room, List<ProjectFloor> floors) =>
+    roomNameWithFloor(room: room, floors: floors);
 
 /// Work lines for КП / КС from finish include flags (пол / стены / потолок).
 ///

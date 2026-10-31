@@ -233,6 +233,7 @@ class _HoldRepeatButtonState extends State<HoldRepeatButton> {
   Timer? _timer;
   bool _pressed = false;
   int _holdTicks = 0;
+  int? _activePointer;
 
   /// Speeds up while held: 100ms → 55ms → 32ms.
   Duration _intervalForHoldTick(int n) {
@@ -251,13 +252,16 @@ class _HoldRepeatButtonState extends State<HoldRepeatButton> {
     });
   }
 
-  void _start() {
+  void _start(int pointer) {
+    // Ignore multi-touch / duplicate downs — otherwise one tap can tick twice.
+    if (_pressed) return;
+    _activePointer = pointer;
     setState(() => _pressed = true);
     _holdTicks = 0;
     widget.onTick();
     _timer?.cancel();
-    // Initial delay before repeat, then accelerating ticks.
-    _timer = Timer(const Duration(milliseconds: 280), () {
+    // Initial delay before repeat (no extra tick at delay start — avoids 2cm on short holds).
+    _timer = Timer(const Duration(milliseconds: 320), () {
       if (!_pressed) return;
       _holdTicks = 1;
       widget.onTick();
@@ -265,12 +269,17 @@ class _HoldRepeatButtonState extends State<HoldRepeatButton> {
     });
   }
 
-  void _stop() {
+  void _stop(int? pointer) {
+    if (pointer != null && _activePointer != null && pointer != _activePointer) {
+      return;
+    }
+    final wasPressed = _pressed;
     _timer?.cancel();
     _timer = null;
     _holdTicks = 0;
+    _activePointer = null;
     if (_pressed) setState(() => _pressed = false);
-    widget.onRelease?.call();
+    if (wasPressed) widget.onRelease?.call();
   }
 
   @override
@@ -285,9 +294,10 @@ class _HoldRepeatButtonState extends State<HoldRepeatButton> {
     final fillTop = _pressed ? const Color(0xFF4A6FA5) : const Color(0xFF5E8BC4);
     final fillBottom = _pressed ? const Color(0xFF2E4560) : const Color(0xFF3D5A80);
     return Listener(
-      onPointerDown: (_) => _start(),
-      onPointerUp: (_) => _stop(),
-      onPointerCancel: (_) => _stop(),
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (e) => _start(e.pointer),
+      onPointerUp: (e) => _stop(e.pointer),
+      onPointerCancel: (e) => _stop(e.pointer),
       child: SizedBox(
         height: h,
         width: double.infinity,

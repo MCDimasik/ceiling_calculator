@@ -390,13 +390,18 @@ class _AppBackgroundState extends State<AppBackground> {
         _scheduleBlur();
 
         final frost = widget.blurAmount.clamp(0.0, 1.0);
+        final scheme = Theme.of(context).colorScheme;
+        final light = Theme.of(context).brightness == Brightness.light;
         return Stack(
           fit: StackFit.expand,
           children: [
-            _buildPhoto(theme, Theme.of(context).colorScheme.surface),
+            _buildPhoto(theme, scheme.surface),
+            // Soft frost on blurred photo — light theme uses white, not black.
             if (frost >= 0.01)
               ColoredBox(
-                color: Colors.black.withValues(alpha: 0.10 + frost * 0.12),
+                color: light
+                    ? Colors.white.withValues(alpha: 0.12 + frost * 0.10)
+                    : Colors.black.withValues(alpha: 0.10 + frost * 0.12),
               ),
             if (want && _videoReady && _video != null)
               FittedBox(
@@ -407,11 +412,19 @@ class _AppBackgroundState extends State<AppBackground> {
                   child: VideoPlayer(_video!),
                 ),
               ),
+            // Dim for readability: light = cool paper veil (not gray fog).
             if (widget.dim)
               ColoredBox(
-                color: Colors.black.withValues(
-                  alpha: widget.dimOpacity.clamp(0.0, 0.85),
-                ),
+                color: light
+                    ? Color.fromRGBO(
+                        236,
+                        240,
+                        248,
+                        (0.62 + widget.dimOpacity * 0.22).clamp(0.55, 0.88),
+                      )
+                    : Colors.black.withValues(
+                        alpha: widget.dimOpacity.clamp(0.0, 0.85),
+                      ),
               ),
             widget.child,
           ],
